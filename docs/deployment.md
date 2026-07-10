@@ -137,7 +137,7 @@ python src/agent.py dev
 ```bash
 cd frontend
 pnpm install
-pnpm dev
+pnpm dev --hostname 0.0.0.0
 ```
 
 ### 6. Access the demo
@@ -217,18 +217,18 @@ If GPU memory is too tight, start LLM first, then TTS. vLLM will claim remaining
 For the demo audience to access from their browsers:
 
 ```bash
-# Option 1: SSH tunnel (quick, no DNS needed)
-ssh -L 3000:localhost:3000 -L 7880:localhost:7880 ubuntu@<ec2-ip>
-
-# Option 2: Direct access (requires security group ports open)
-# Edit frontend/.env.local:
+# Edit frontend/.env.local — point at the public IP:
 LIVEKIT_URL=ws://<ec2-public-ip>:7880
 ```
 
-Note: WebRTC audio requires HTTPS in production browsers. For demo purposes, `localhost` or `http://` with Chrome flags works. For remote access over HTTP, launch Chrome with:
+> **Do not use SSH tunnels.** WebRTC audio uses UDP, which SSH cannot forward. The signaling will connect but audio frames will be silence. Always access the server directly.
 
-```
-chrome --unsafely-treat-insecure-origin-as-secure="http://<ec2-ip>:3000"
+WebRTC microphone capture requires HTTPS in production browsers. For demo purposes, launch Chrome with the insecure-origin flag:
+
+```bash
+chrome --unsafely-treat-insecure-origin-as-secure="http://<ec2-ip>:3000" \
+  --user-data-dir=/tmp/chrome-voice-demo \
+  "http://<ec2-ip>:3000"
 ```
 
 ---
