@@ -2,12 +2,8 @@ import asyncio
 import json
 import logging
 import os
-import time
 from collections import defaultdict
 
-from vllm_realtime import VLLMRealtimeModel
-
-import yaml
 from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
@@ -15,33 +11,33 @@ from livekit.agents import (
     AgentSession,
     AutoSubscribe,
     JobContext,
-    MetricsCollectedEvent,
     cli,
-    metrics,
 )
-from livekit.agents.metrics import LLMMetrics, STTMetrics, TTSMetrics
+from livekit.agents.voice.events import (
+    UserStateChangedEvent,
+    AgentStateChangedEvent,
+    UserInputTranscribedEvent,
+    MetricsCollectedEvent,
+    ErrorEvent,
+)
 from livekit.plugins import openai, silero
 
 load_dotenv(".env.local")
 logger = logging.getLogger("voice-assistant")
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s - %(message)s')
 
-CONFIG_MAP = {
-    "stt-llm-tts": "stt-llm-tts-config.yaml",
-    "llm-tts": "llm-tts-config.yaml",
-    "omni": "omni-config.yaml"
-}
+STT_BASE_URL = os.getenv("STT_BASE_URL", "http://localhost:8001/v1")
+STT_MODEL = os.getenv("STT_MODEL", "Systran/faster-whisper-large-v3")
 
-def load_config_for_session(session_type):
-    """Load configuration from YAML file."""
-    try:
-        with open(CONFIG_MAP[session_type], 'r') as f:
-            return yaml.safe_load(f)
-    except FileNotFoundError:
-        logger.warning("Config file not found for session of type %s", session_type)
-        return {}
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8002/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-3-4b-it")
+
+TTS_BASE_URL = os.getenv("TTS_BASE_URL", "http://localhost:8003/v1")
+TTS_MODEL = os.getenv("TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
+TTS_VOICE = os.getenv("TTS_VOICE", "vivian")
 
 server = AgentServer()
+
 
 class VoiceAssistant(Agent):
     def __init__(self) -> None:
@@ -49,140 +45,106 @@ class VoiceAssistant(Agent):
             instructions="You are a helpful voice assistant. Respond naturally and concisely.",
         )
 
-def build_agent_session(session_type: str):
-    config = load_config_for_session(session_type)
-    if session_type == "stt-llm-tts":
-        stt_base_url = config.get("stt_base_url", "http://localhost:8001/v1")
-        stt_model = config.get("stt_model", "Systran/faster-whisper-large-v3")
-
-        llm_base_url = config.get("llm_base_url", "http://localhost:8002/v1")
-        llm_model = config.get("llm_model", "google/gemma-3-4b-it")
-
-        tts_base_url = config.get("tts_base_url", "http://localhost:8003/v1")
-        tts_model = config.get("tts_model", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
-        tts_voice = config.get("tts_voice", "vivian")
-
-        logger.info("STT: model=%s url=%s", stt_model, stt_base_url)
-        logger.info("LLM: model=%s url=%s", llm_model, llm_base_url)
-        logger.info("TTS: model=%s voice=%s url=%s", tts_model, tts_voice, tts_base_url)
-
-        session = AgentSession(
-            stt=openai.STT(
-                model=stt_model,
-                base_url=stt_base_url,
-                api_key="not-needed",
-                language="en",
-            ),
-            llm=openai.LLM(
-                model=llm_model,
-                base_url=llm_base_url,
-                api_key="not-needed",
-            ),
-            tts=openai.TTS(
-                model=tts_model,
-                voice=tts_voice,
-                base_url=tts_base_url,
-                api_key="not-needed",
-            ),
-            vad=silero.VAD.load(),
-        )
-        return session, {"stt_model": stt_model, "llm_model": llm_model, "tts_model": tts_model}
-    elif session_type == "llm-tts":
-        return AgentSession(), {}
-    elif session_type == "omni":
-        base_url = config["base_url"]
-        model = config["model"]
-        model = VLLMRealtimeModel(
-            base_url=base_url,
-            model=model,
-        )
-
-        session = AgentSession(
-            llm=model,
-            vad=silero.VAD.load(),
-            turn_detection="vad",
-        )
-        return session, {"omni_model": model}
 
 @server.rtc_session(agent_name="voice-assistant")
 async def entrypoint(ctx: JobContext):
-    session_type = os.getenv("SESSION_TYPE", "stt-llm-tts")
     logger.info("=== Disaggregated Voice Pipeline ===")
-    logger.info("Session type: %s", session_type)
+    logger.info("STT: model=%s url=%s", STT_MODEL, STT_BASE_URL)
+    logger.info("LLM: model=%s url=%s", LLM_MODEL, LLM_BASE_URL)
+    logger.info("TTS: model=%s voice=%s url=%s", TTS_MODEL, TTS_VOICE, TTS_BASE_URL)
 
-    session, model_info = build_agent_session(session_type)
+    session = AgentSession(
+        stt=openai.STT(
+            model=STT_MODEL,
+            base_url=STT_BASE_URL,
+            api_key="not-needed",
+            language="en",
+        ),
+        llm=openai.LLM(
+            model=LLM_MODEL,
+            base_url=LLM_BASE_URL,
+            api_key="not-needed",
+        ),
+        tts=openai.TTS(
+            model=TTS_MODEL,
+            voice=TTS_VOICE,
+            base_url=TTS_BASE_URL,
+            api_key="not-needed",
+            response_format="pcm",
+        ),
+        vad=silero.VAD.load(),
+        turn_detection=None,
+    )
 
-    turn_metrics: dict[str, dict[str, float]] = defaultdict(dict)
+    turn_metrics = defaultdict(dict)
+
+    @session.on("user_state_changed")
+    def on_user_state(ev: UserStateChangedEvent):
+        logger.info(">>> USER STATE: %s -> %s", ev.old_state, ev.new_state)
+
+    @session.on("agent_state_changed")
+    def on_agent_state(ev: AgentStateChangedEvent):
+        logger.info(">>> AGENT STATE: %s -> %s", ev.old_state, ev.new_state)
+
+    @session.on("user_input_transcribed")
+    def on_transcribed(ev: UserInputTranscribedEvent):
+        logger.info(">>> TRANSCRIBED: '%s' (final=%s)", ev.transcript, ev.is_final)
+
+    @session.on("error")
+    def on_error(ev: ErrorEvent):
+        logger.error(">>> ERROR: type=%s label=%s error=%r recoverable=%s",
+                      ev.error.type, ev.error.label, ev.error.error, ev.error.recoverable)
 
     @session.on("metrics_collected")
     def on_metrics(ev: MetricsCollectedEvent):
         m = ev.metrics
-        metrics.log_metrics(m)
+        speech_id = getattr(m, "speech_id", None) or "unknown"
 
-        speech_id = getattr(m, "speech_id", None)
-        if speech_id is None:
-            return
+        if m.type == "stt_metrics":
+            dur_ms = m.duration * 1000
+            turn_metrics[speech_id]["stt_ms"] = dur_ms
+            logger.info("[%s] STT complete: %.0fms (model=%s)", speech_id, dur_ms, STT_MODEL)
 
-        if isinstance(m, STTMetrics):
-            duration_ms = m.duration * 1000
-            turn_metrics[speech_id]["stt_ms"] = duration_ms
-            logger.info(
-                "[%s] STT complete: %.0fms (model=%s)", speech_id, duration_ms, model_info.get("stt_model", "unknown")
-            )
-
-        elif isinstance(m, LLMMetrics):
+        elif m.type == "llm_metrics":
             ttft_ms = m.ttft * 1000
-            total_ms = m.duration * 1000
+            dur_ms = m.duration * 1000
             turn_metrics[speech_id]["llm_ttft_ms"] = ttft_ms
-            turn_metrics[speech_id]["llm_total_ms"] = total_ms
-            logger.info(
-                "[%s] LLM complete: ttft=%.0fms total=%.0fms (model=%s)",
-                speech_id,
-                ttft_ms,
-                total_ms,
-                model_info.get("llm_model", "unknown"),
-            )
+            turn_metrics[speech_id]["llm_total_ms"] = dur_ms
+            logger.info("[%s] LLM complete: ttft=%.0fms total=%.0fms (model=%s)",
+                         speech_id, ttft_ms, dur_ms, LLM_MODEL)
 
-        elif isinstance(m, TTSMetrics):
+        elif m.type == "tts_metrics":
             ttfb_ms = m.ttfb * 1000
-            total_ms = m.duration * 1000
+            dur_ms = m.duration * 1000
             turn_metrics[speech_id]["tts_ttfb_ms"] = ttfb_ms
-            turn_metrics[speech_id]["tts_total_ms"] = total_ms
-            logger.info(
-                "[%s] TTS complete: ttfb=%.0fms total=%.0fms (model=%s)",
-                speech_id,
-                ttfb_ms,
-                total_ms,
-                model_info.get("tts_model", "unknown"),
-            )
+            turn_metrics[speech_id]["tts_total_ms"] = dur_ms
+            logger.info("[%s] TTS complete: ttfb=%.0fms total=%.0fms (model=%s)",
+                         speech_id, ttfb_ms, dur_ms, TTS_MODEL)
 
-        record = turn_metrics[speech_id]
-        if all(k in record for k in ("stt_ms", "llm_ttft_ms", "tts_ttfb_ms")):
-            record["speech_id"] = speech_id
-            record["total_ms"] = record["stt_ms"] + record["llm_ttft_ms"] + record["tts_ttfb_ms"]
-            logger.info(
-                "[%s] === Pipeline total: %.0fms (STT=%.0f + LLM_TTFT=%.0f + TTS_TTFB=%.0f) ===",
-                speech_id,
-                record["total_ms"],
-                record["stt_ms"],
-                record["llm_ttft_ms"],
-                record["tts_ttfb_ms"],
-            )
+            data = turn_metrics[speech_id]
+            stt = data.get("stt_ms", 0)
+            llm_ttft = data.get("llm_ttft_ms", 0)
+            tts_ttfb = ttfb_ms
+            total = stt + llm_ttft + tts_ttfb
+
+            logger.info("[%s] === Pipeline total: %.0fms (STT=%.0f + LLM_TTFT=%.0f + TTS_TTFB=%.0f) ===",
+                         speech_id, total, stt, llm_ttft, tts_ttfb)
+
+            timing_payload = json.dumps({
+                "speech_id": speech_id,
+                "stt_ms": stt,
+                "llm_ttft_ms": llm_ttft,
+                "llm_total_ms": data.get("llm_total_ms", 0),
+                "tts_ttfb_ms": tts_ttfb,
+                "tts_total_ms": dur_ms,
+                "total_ms": total,
+            })
             asyncio.create_task(
-                ctx.room.local_participant.publish_data(
-                    json.dumps(record),
-                    topic="timing",
-                    reliable=True,
-                )
+                ctx.room.local_participant.publish_data(timing_payload, topic="timing")
             )
-            del turn_metrics[speech_id]
 
-    await session.start(
-        agent=VoiceAssistant(),
-        room=ctx.room,
-    )
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-
+    await session.start(agent=VoiceAssistant(), room=ctx.room)
     logger.info("Voice assistant started — disaggregated pipeline active")
 
 
