@@ -1,0 +1,14 @@
+# STT-LLM-TTS Configuration
+
+# Speech-to-Text (STT) settings
+stt_base_url: http://localhost:8001/v1
+stt_model: Systran/faster-whisper-large-v3
+
+# Large Language Model (LLM) settings
+llm_base_url: http://localhost:8002/v1
+llm_model: google/gemma-3-4b-it
+
+# Text-to-Speech (TTS) settings
+tts_base_url: http://localhost:8003/v1
+tts_model: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+tts_voice: vivian

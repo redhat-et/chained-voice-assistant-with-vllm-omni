@@ -11,6 +11,7 @@ dependencies = [
     "livekit-agents[openai]~=1.5",
     "livekit-plugins-silero~=1.0",
     "python-dotenv",
+    "pyyaml",
 ]
 
 [tool.setuptools.packages.find]
