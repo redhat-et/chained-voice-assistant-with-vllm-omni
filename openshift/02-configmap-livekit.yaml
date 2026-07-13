@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: livekit-config
+  namespace: shwalsh
+data:
+  config.yaml: |
+    port: 7890
+    rtc:
+      tcp_port: 7891
+      port_range_start: 50000
+      port_range_end: 50100
+      use_external_ip: false
+      node_ip: 10.14.202.14
+    keys:
+      devkey: secret
