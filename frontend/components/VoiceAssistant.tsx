@@ -12,6 +12,7 @@ import "@livekit/components-styles";
 import { RoomEvent } from "livekit-client";
 import { useCallback, useEffect, useState } from "react";
 import TimingOverlay, { type TimingData } from "./TimingOverlay";
+import ModelSelector, { DEFAULT_SELECTION, type ModelSelection } from "./ModelSelector";
 
 interface ConnectionDetails {
   serverUrl: string;
@@ -65,11 +66,17 @@ export default function VoiceAssistant() {
   const [connectionDetails, setConnectionDetails] =
     useState<ConnectionDetails | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [modelSelection, setModelSelection] =
+    useState<ModelSelection>(DEFAULT_SELECTION);
 
   const handleConnect = useCallback(async () => {
     setConnecting(true);
     try {
-      const response = await fetch("/api/token", { method: "POST" });
+      const response = await fetch("/api/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(modelSelection),
+      });
       if (!response.ok) throw new Error("Failed to get token");
       const details: ConnectionDetails = await response.json();
       setConnectionDetails(details);
@@ -77,7 +84,7 @@ export default function VoiceAssistant() {
       console.error("Connection failed:", err);
       setConnecting(false);
     }
-  }, []);
+  }, [modelSelection]);
 
   const handleDisconnected = useCallback(() => {
     setConnectionDetails(null);
@@ -86,7 +93,12 @@ export default function VoiceAssistant() {
 
   if (!connectionDetails) {
     return (
-      <div className="flex flex-col items-center gap-6">
+      <div className="flex flex-col items-center gap-6 w-full max-w-2xl">
+        <ModelSelector
+          selection={modelSelection}
+          onSelectionChange={setModelSelection}
+          disabled={false}
+        />
         <button
           onClick={handleConnect}
           disabled={connecting}
@@ -99,19 +111,26 @@ export default function VoiceAssistant() {
   }
 
   return (
-    <LiveKitRoom
-      token={connectionDetails.participantToken}
-      serverUrl={connectionDetails.serverUrl}
-      connect={true}
-      audio={true}
-      onDisconnected={handleDisconnected}
-      className="flex flex-col items-center gap-8"
-    >
-      <AgentVisualizer />
-      <RoomAudioRenderer />
-      <DisconnectButton className="rounded-full border border-zinc-700 px-6 py-3 text-sm text-zinc-300 transition-colors hover:border-red-500 hover:text-red-400">
-        End Conversation
-      </DisconnectButton>
-    </LiveKitRoom>
+    <div className="flex flex-col items-center gap-6 w-full max-w-2xl">
+      <ModelSelector
+        selection={modelSelection}
+        onSelectionChange={setModelSelection}
+        disabled={true}
+      />
+      <LiveKitRoom
+        token={connectionDetails.participantToken}
+        serverUrl={connectionDetails.serverUrl}
+        connect={true}
+        audio={true}
+        onDisconnected={handleDisconnected}
+        className="flex flex-col items-center gap-8"
+      >
+        <AgentVisualizer />
+        <RoomAudioRenderer />
+        <DisconnectButton className="rounded-full border border-zinc-700 px-6 py-3 text-sm text-zinc-300 transition-colors hover:border-red-500 hover:text-red-400">
+          End Conversation
+        </DisconnectButton>
+      </LiveKitRoom>
+    </div>
   );
 }

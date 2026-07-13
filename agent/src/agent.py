@@ -49,25 +49,49 @@ class VoiceAssistant(Agent):
 @server.rtc_session(agent_name="voice-assistant")
 async def entrypoint(ctx: JobContext):
     logger.info("=== Disaggregated Voice Pipeline ===")
-    logger.info("STT: model=%s url=%s", STT_MODEL, STT_BASE_URL)
-    logger.info("LLM: model=%s url=%s", LLM_MODEL, LLM_BASE_URL)
-    logger.info("TTS: model=%s voice=%s url=%s", TTS_MODEL, TTS_VOICE, TTS_BASE_URL)
+
+    stt_model, llm_model, tts_model, tts_voice = STT_MODEL, LLM_MODEL, TTS_MODEL, TTS_VOICE
+    sources = {"stt": "env", "llm": "env", "tts": "env", "voice": "env"}
+
+    raw_meta = getattr(ctx.job, "metadata", None) or ""
+    if raw_meta.strip():
+        try:
+            meta = json.loads(raw_meta)
+            if meta.get("stt_model"):
+                stt_model = meta["stt_model"]
+                sources["stt"] = "metadata"
+            if meta.get("llm_model"):
+                llm_model = meta["llm_model"]
+                sources["llm"] = "metadata"
+            if meta.get("tts_model"):
+                tts_model = meta["tts_model"]
+                sources["tts"] = "metadata"
+            if meta.get("tts_voice"):
+                tts_voice = meta["tts_voice"]
+                sources["voice"] = "metadata"
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning("Failed to parse job metadata, using env defaults: %s", e)
+
+    logger.info("STT: model=%s url=%s (source=%s)", stt_model, STT_BASE_URL, sources["stt"])
+    logger.info("LLM: model=%s url=%s (source=%s)", llm_model, LLM_BASE_URL, sources["llm"])
+    logger.info("TTS: model=%s voice=%s url=%s (source=%s, voice=%s)",
+                tts_model, tts_voice, TTS_BASE_URL, sources["tts"], sources["voice"])
 
     session = AgentSession(
         stt=openai.STT(
-            model=STT_MODEL,
+            model=stt_model,
             base_url=STT_BASE_URL,
             api_key="not-needed",
             language="en",
         ),
         llm=openai.LLM(
-            model=LLM_MODEL,
+            model=llm_model,
             base_url=LLM_BASE_URL,
             api_key="not-needed",
         ),
         tts=openai.TTS(
-            model=TTS_MODEL,
-            voice=TTS_VOICE,
+            model=tts_model,
+            voice=tts_voice,
             base_url=TTS_BASE_URL,
             api_key="not-needed",
             response_format="pcm",
@@ -103,7 +127,7 @@ async def entrypoint(ctx: JobContext):
         if m.type == "stt_metrics":
             dur_ms = m.duration * 1000
             turn_metrics[speech_id]["stt_ms"] = dur_ms
-            logger.info("[%s] STT complete: %.0fms (model=%s)", speech_id, dur_ms, STT_MODEL)
+            logger.info("[%s] STT complete: %.0fms (model=%s)", speech_id, dur_ms, stt_model)
 
         elif m.type == "llm_metrics":
             ttft_ms = m.ttft * 1000
@@ -111,7 +135,7 @@ async def entrypoint(ctx: JobContext):
             turn_metrics[speech_id]["llm_ttft_ms"] = ttft_ms
             turn_metrics[speech_id]["llm_total_ms"] = dur_ms
             logger.info("[%s] LLM complete: ttft=%.0fms total=%.0fms (model=%s)",
-                         speech_id, ttft_ms, dur_ms, LLM_MODEL)
+                         speech_id, ttft_ms, dur_ms, llm_model)
 
         elif m.type == "tts_metrics":
             ttfb_ms = m.ttfb * 1000
@@ -119,7 +143,7 @@ async def entrypoint(ctx: JobContext):
             turn_metrics[speech_id]["tts_ttfb_ms"] = ttfb_ms
             turn_metrics[speech_id]["tts_total_ms"] = dur_ms
             logger.info("[%s] TTS complete: ttfb=%.0fms total=%.0fms (model=%s)",
-                         speech_id, ttfb_ms, dur_ms, TTS_MODEL)
+                         speech_id, ttfb_ms, dur_ms, tts_model)
 
             data = turn_metrics[speech_id]
             stt = data.get("stt_ms", 0)
