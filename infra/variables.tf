@@ -1,13 +1,13 @@
 variable "aws_region" {
-  description = "AWS region — eu-west-1 has better g5 quota than us regions"
+  description = "AWS region — eu-north-1 has g6e (L40S 48GB) availability"
   type        = string
-  default     = "eu-west-1"
+  default     = "eu-north-1"
 }
 
 variable "instance_type" {
-  description = "EC2 GPU instance type (g5.xlarge=A10G 24GB, g5.2xlarge=A10G 24GB+8vCPU, g6e.xlarge=L40S 48GB)"
+  description = "EC2 GPU instance type (g6e.2xlarge=L40S 48GB+8vCPU, g5.xlarge=A10G 24GB)"
   type        = string
-  default     = "g5.2xlarge"
+  default     = "g6e.2xlarge"
 }
 
 variable "key_pair_name" {
@@ -27,21 +27,21 @@ variable "hf_token" {
 }
 
 variable "llm_model" {
-  description = "LLM model — use quantized for 24GB GPU, full bf16 for 48GB+"
+  description = "LLM model — full bf16 for 48GB GPU, quantized for 24GB"
   type        = string
-  default     = "RedHatAI/gemma-3-4b-it-quantized.w4a16"
+  default     = "google/gemma-3-4b-it"
 }
 
 variable "llm_gpu_util" {
-  description = "GPU memory fraction for LLM (0.3 for 24GB shared, 0.5+ for 48GB)"
+  description = "GPU memory fraction for LLM (0.4 for 48GB, 0.3 for 24GB shared)"
   type        = string
-  default     = "0.3"
+  default     = "0.4"
 }
 
 variable "tts_gpu_util" {
-  description = "GPU memory fraction for TTS (0.3 for 24GB shared, 0.5+ for 48GB)"
+  description = "GPU memory fraction for TTS (0.4 for 48GB, 0.3 for 24GB shared)"
   type        = string
-  default     = "0.3"
+  default     = "0.4"
 }
 
 variable "root_volume_size" {
