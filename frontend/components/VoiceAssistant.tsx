@@ -12,7 +12,11 @@ import "@livekit/components-styles";
 import { RoomEvent } from "livekit-client";
 import { useCallback, useEffect, useState } from "react";
 import TimingOverlay, { type TimingData } from "./TimingOverlay";
-import ModelSelector, { DEFAULT_SELECTION, type ModelSelection } from "./ModelSelector";
+import ModelSelector, {
+  defaultSelectionFromAvailable,
+  type AvailableModels,
+  type ModelSelection,
+} from "./ModelSelector";
 
 interface ConnectionDetails {
   serverUrl: string;
@@ -24,7 +28,7 @@ interface ConnectionDetails {
 function AgentVisualizer() {
   const { state, audioTrack } = useVoiceAssistant();
   const room = useRoomContext();
-  const [timing, setTiming] = useState<TimingData | null>(null);
+  const [history, setHistory] = useState<TimingData[]>([]);
 
   useEffect(() => {
     const handleData = (
@@ -38,7 +42,7 @@ function AgentVisualizer() {
           const data: TimingData = JSON.parse(
             new TextDecoder().decode(payload)
           );
-          setTiming(data);
+          setHistory((prev) => [...prev, data]);
         } catch {
           // ignore malformed timing data
         }
@@ -52,12 +56,12 @@ function AgentVisualizer() {
   }, [room]);
 
   return (
-    <div className="flex flex-col items-center gap-4">
+    <div className="flex flex-col items-center gap-4 w-full">
       <div className="h-48 w-full max-w-md">
         <BarVisualizer state={state} barCount={5} trackRef={audioTrack} />
       </div>
       <p className="text-sm text-zinc-400 capitalize">{state}</p>
-      {timing && <TimingOverlay timing={timing} />}
+      <TimingOverlay history={history} />
     </div>
   );
 }
@@ -66,10 +70,23 @@ export default function VoiceAssistant() {
   const [connectionDetails, setConnectionDetails] =
     useState<ConnectionDetails | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [modelSelection, setModelSelection] =
-    useState<ModelSelection>(DEFAULT_SELECTION);
+  const [available, setAvailable] = useState<AvailableModels | null>(null);
+  const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
+
+  useEffect(() => {
+    fetch("/api/models")
+      .then((r) => r.json())
+      .then((data: AvailableModels) => {
+        setAvailable(data);
+        setModelSelection(defaultSelectionFromAvailable(data));
+      })
+      .catch(() => {
+        setModelSelection(defaultSelectionFromAvailable({ stt: [], llm: [], tts: [] }));
+      });
+  }, []);
 
   const handleConnect = useCallback(async () => {
+    if (!modelSelection) return;
     setConnecting(true);
     try {
       const response = await fetch("/api/token", {
@@ -91,6 +108,14 @@ export default function VoiceAssistant() {
     setConnecting(false);
   }, []);
 
+  if (!modelSelection) {
+    return (
+      <div className="flex flex-col items-center gap-6 w-full max-w-2xl">
+        <p className="text-sm text-zinc-400">Loading available models...</p>
+      </div>
+    );
+  }
+
   if (!connectionDetails) {
     return (
       <div className="flex flex-col items-center gap-6 w-full max-w-2xl">
@@ -98,6 +123,7 @@ export default function VoiceAssistant() {
           selection={modelSelection}
           onSelectionChange={setModelSelection}
           disabled={false}
+          available={available}
         />
         <button
           onClick={handleConnect}
@@ -116,6 +142,7 @@ export default function VoiceAssistant() {
         selection={modelSelection}
         onSelectionChange={setModelSelection}
         disabled={true}
+        available={available}
       />
       <LiveKitRoom
         token={connectionDetails.participantToken}

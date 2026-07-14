@@ -105,9 +105,11 @@ LKEOF
 # Key fixes vs naive compose:
 #   - LiveKit uses host networking for proper ICE candidate advertisement
 #   - STT maps 8001:8000 (image listens on 8000, not 8001)
-#   - vLLM commands omit "vllm serve" (entrypoint already includes it)
+#   - TTS (vllm-omni) needs "vllm serve" prefix — image has NO entrypoint
+#   - LLM (vllm-openai) omits "vllm serve" — entrypoint already includes it
 #   - Agent connects to LiveKit via private IP (host networking)
 #   - Agent STT_BASE_URL uses internal port 8000
+#   - Frontend gets backend URLs for dynamic model discovery (/api/models)
 #   - GPU services start sequentially to avoid memory contention
 # -----------------------------------------------------------------------
 cat > docker-compose.yml <<DCEOF
@@ -135,7 +137,7 @@ services:
     environment:
       - "HF_TOKEN=$HF_TOKEN"
     command: >-
-      Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+      vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
       --omni
       --host 0.0.0.0
       --port 8003
@@ -208,6 +210,9 @@ services:
       - LIVEKIT_URL=ws://$PUBLIC_IP:7880
       - LIVEKIT_API_KEY=devkey
       - LIVEKIT_API_SECRET=secret
+      - STT_BASE_URL=http://stt:8000
+      - LLM_BASE_URL=http://llm:8002
+      - TTS_BASE_URL=http://tts:8003
     ports:
       - "3000:3000"
     restart: unless-stopped

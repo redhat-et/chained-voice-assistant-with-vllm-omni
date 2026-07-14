@@ -16,17 +16,18 @@ function formatMs(ms: number): string {
   return `${Math.round(ms)}ms`;
 }
 
-export default function TimingOverlay({ timing }: { timing: TimingData }) {
+function TurnRow({ timing, index }: { timing: TimingData; index: number }) {
   return (
-    <div className="flex flex-wrap items-center justify-center gap-3 rounded-lg bg-zinc-900/80 px-4 py-2 text-xs font-mono backdrop-blur-sm border border-zinc-800">
+    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-zinc-900/80 px-4 py-2 text-xs font-mono backdrop-blur-sm border border-zinc-800">
+      <span className="text-zinc-500 w-4 text-right">{index}</span>
       <span className="text-blue-400">
         STT <span className="text-zinc-300">{formatMs(timing.stt_ms)}</span>
       </span>
-      <span className="text-zinc-600">→</span>
+      <span className="text-zinc-600">&rarr;</span>
       <span className="text-green-400">
         LLM <span className="text-zinc-300">{formatMs(timing.llm_ttft_ms)}</span>
       </span>
-      <span className="text-zinc-600">→</span>
+      <span className="text-zinc-600">&rarr;</span>
       <span className="text-purple-400">
         TTS <span className="text-zinc-300">{formatMs(timing.tts_ttfb_ms)}</span>
       </span>
@@ -34,6 +35,18 @@ export default function TimingOverlay({ timing }: { timing: TimingData }) {
       <span className="text-yellow-400">
         Total <span className="text-zinc-300">{formatMs(timing.total_ms)}</span>
       </span>
+    </div>
+  );
+}
+
+export default function TimingOverlay({ history }: { history: TimingData[] }) {
+  if (history.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1.5 w-full max-h-60 overflow-y-auto">
+      {history.map((t, i) => (
+        <TurnRow key={t.speech_id} timing={t} index={i + 1} />
+      ))}
     </div>
   );
 }
