@@ -40,10 +40,8 @@ server = AgentServer()
 
 
 class VoiceAssistant(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="You are a helpful voice assistant. Respond naturally and concisely.",
-        )
+    def __init__(self, instructions: str = "You are a helpful voice assistant. Respond naturally and concisely.") -> None:
+        super().__init__(instructions=instructions)
 
 
 @server.rtc_session(agent_name="voice-assistant")
@@ -167,8 +165,12 @@ async def entrypoint(ctx: JobContext):
                 ctx.room.local_participant.publish_data(timing_payload, topic="timing")
             )
 
+    instructions = "You are a helpful voice assistant. Respond naturally and concisely."
+    if "qwen" in llm_model.lower():
+        instructions += " /no_think"
+
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    await session.start(agent=VoiceAssistant(), room=ctx.room)
+    await session.start(agent=VoiceAssistant(instructions=instructions), room=ctx.room)
     logger.info("Voice assistant started — disaggregated pipeline active")
 
 

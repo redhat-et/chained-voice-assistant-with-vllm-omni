@@ -15,16 +15,38 @@ async function fetchModels(baseUrl: string): Promise<string[]> {
   }
 }
 
+interface LlmStatus {
+  model: string;
+  available: string[];
+}
+
+async function fetchLlmStatus(managerUrl: string): Promise<LlmStatus> {
+  try {
+    const res = await fetch(`${managerUrl}/llm-status`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error("manager unavailable");
+    return await res.json();
+  } catch {
+    const llmUrl = process.env.LLM_BASE_URL ?? "http://llm:8002";
+    const loaded = await fetchModels(llmUrl);
+    return { model: loaded[0] ?? "", available: loaded };
+  }
+}
+
 export async function GET() {
   const sttUrl = process.env.STT_BASE_URL ?? "http://stt:8000";
-  const llmUrl = process.env.LLM_BASE_URL ?? "http://llm:8002";
   const ttsUrl = process.env.TTS_BASE_URL ?? "http://tts:8003";
+  const managerUrl = process.env.MODEL_MANAGER_URL ?? "http://host.docker.internal:8006";
 
-  const [stt, llm, tts] = await Promise.all([
+  const [stt, llmStatus, tts] = await Promise.all([
     fetchModels(sttUrl),
-    fetchModels(llmUrl),
+    fetchLlmStatus(managerUrl),
     fetchModels(ttsUrl),
   ]);
 
-  return NextResponse.json({ stt, llm, tts });
+  return NextResponse.json({
+    stt,
+    llm: llmStatus.available,
+    tts,
+    llm_active: llmStatus.model,
+  });
 }

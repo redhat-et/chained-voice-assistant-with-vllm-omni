@@ -159,7 +159,6 @@ resource "aws_instance" "gpu" {
 
   user_data = templatefile("${path.module}/user_data.sh", {
     hf_token     = var.hf_token
-    llm_model    = var.llm_model
     llm_gpu_util = var.llm_gpu_util
     tts_gpu_util = var.tts_gpu_util
   })

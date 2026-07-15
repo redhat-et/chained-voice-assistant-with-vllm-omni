@@ -26,20 +26,14 @@ variable "hf_token" {
   sensitive   = true
 }
 
-variable "llm_model" {
-  description = "LLM model — full bf16 for 48GB GPU, quantized for 24GB"
-  type        = string
-  default     = "google/gemma-3-4b-it"
-}
-
 variable "llm_gpu_util" {
-  description = "GPU memory fraction for LLM (0.4 for 48GB, 0.3 for 24GB shared)"
+  description = "GPU memory fraction for LLM (single model swapped at runtime)"
   type        = string
   default     = "0.4"
 }
 
 variable "tts_gpu_util" {
-  description = "GPU memory fraction for TTS (0.4 for 48GB, 0.3 for 24GB shared)"
+  description = "GPU memory fraction for TTS"
   type        = string
   default     = "0.4"
 }

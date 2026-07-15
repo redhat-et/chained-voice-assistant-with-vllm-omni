@@ -70,14 +70,17 @@ export default function VoiceAssistant() {
   const [connectionDetails, setConnectionDetails] =
     useState<ConnectionDetails | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
   const [available, setAvailable] = useState<AvailableModels | null>(null);
+  const [activeLlm, setActiveLlm] = useState("");
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
 
   useEffect(() => {
     fetch("/api/models")
       .then((r) => r.json())
-      .then((data: AvailableModels) => {
+      .then((data: AvailableModels & { llm_active?: string }) => {
         setAvailable(data);
+        setActiveLlm(data.llm_active ?? data.llm[0] ?? "");
         setModelSelection(defaultSelectionFromAvailable(data));
       })
       .catch(() => {
@@ -89,6 +92,22 @@ export default function VoiceAssistant() {
     if (!modelSelection) return;
     setConnecting(true);
     try {
+      if (modelSelection.llm_model !== activeLlm) {
+        const shortName = modelSelection.llm_model.split("/").pop() ?? modelSelection.llm_model;
+        setStatusMsg(`Loading ${shortName}...`);
+        const switchRes = await fetch("/api/switch-llm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelSelection.llm_model }),
+        });
+        if (!switchRes.ok) {
+          const err = await switchRes.json();
+          throw new Error(err.error || "Failed to switch LLM model");
+        }
+        setActiveLlm(modelSelection.llm_model);
+      }
+
+      setStatusMsg("Connecting...");
       const response = await fetch("/api/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -97,11 +116,13 @@ export default function VoiceAssistant() {
       if (!response.ok) throw new Error("Failed to get token");
       const details: ConnectionDetails = await response.json();
       setConnectionDetails(details);
+      setStatusMsg("");
     } catch (err) {
       console.error("Connection failed:", err);
       setConnecting(false);
+      setStatusMsg("");
     }
-  }, [modelSelection]);
+  }, [modelSelection, activeLlm]);
 
   const handleDisconnected = useCallback(() => {
     setConnectionDetails(null);
@@ -130,7 +151,7 @@ export default function VoiceAssistant() {
           disabled={connecting}
           className="rounded-full bg-white px-8 py-4 text-lg font-medium text-black transition-opacity hover:opacity-80 disabled:opacity-50"
         >
-          {connecting ? "Connecting..." : "Start Conversation"}
+          {connecting ? (statusMsg || "Connecting...") : "Start Conversation"}
         </button>
       </div>
     );
