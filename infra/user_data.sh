@@ -9,7 +9,7 @@ LLM_GPU_UTIL="${llm_gpu_util}"
 
 DEFAULT_LLM="google/gemma-3-4b-it"
 
-REPO_URL="https://github.com/Shaun-Walsh/voice-pipeline-disaggregated.git"
+REPO_URL="https://github.com/redhat-et/chained-voice-assistant-with-vllm-omni.git"
 REPO_BRANCH="feature/runtime-model-selection"
 WORKDIR="/opt/voice-pipeline"
 
