@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tts
-  namespace: shwalsh
+  namespace: voice-pipeline
   labels:
     app.kubernetes.io/name: tts
 spec:
@@ -61,7 +61,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: tts-server
-  namespace: shwalsh
+  namespace: voice-pipeline
 spec:
   selector:
     app.kubernetes.io/name: tts

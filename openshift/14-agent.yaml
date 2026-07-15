@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: agent
-  namespace: shwalsh
+  namespace: voice-pipeline
   labels:
     app.kubernetes.io/name: agent
 spec:
@@ -20,7 +20,7 @@ spec:
           image: quay.io/redhat-et/voice-pipeline-agent:latest
           env:
             - name: LIVEKIT_URL
-              value: ws://livekit-server:7890
+              value: ws://livekit-server:7880
             - name: LIVEKIT_API_KEY
               valueFrom:
                 secretKeyRef:

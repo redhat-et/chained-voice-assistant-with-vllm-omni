@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: llm
-  namespace: shwalsh
+  namespace: voice-pipeline
   labels:
     app.kubernetes.io/name: llm
 spec:
@@ -64,7 +64,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: llm-server
-  namespace: shwalsh
+  namespace: voice-pipeline
 spec:
   selector:
     app.kubernetes.io/name: llm
