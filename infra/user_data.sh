@@ -162,6 +162,7 @@ services:
     shm_size: "8g"
     environment:
       - "HF_TOKEN=$HF_TOKEN"
+      - HF_HUB_OFFLINE=1
     command: >-
       vllm serve \${TTS_ACTIVE_MODEL}
       --omni
@@ -187,6 +188,7 @@ services:
     shm_size: "8g"
     environment:
       - "HF_TOKEN=$HF_TOKEN"
+      - HF_HUB_OFFLINE=1
       - VLLM_USAGE_SOURCE=production
     command: >-
       \${LLM_ACTIVE_MODEL}
