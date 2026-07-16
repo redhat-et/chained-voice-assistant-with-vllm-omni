@@ -94,7 +94,7 @@ pip3 install -q huggingface-hub
 export HF_HOME=/opt/hf-cache
 for model in "google/gemma-3-4b-it" "Qwen/Qwen3-0.6B" "mistralai/Mistral-7B-Instruct-v0.3"; do
   echo ">>> Downloading $model..."
-  huggingface-cli download --token "$HF_TOKEN" "$model" 2>&1 || echo "WARNING: Failed to download $model"
+  hf download "$model" --token "$HF_TOKEN" 2>&1 || echo "WARNING: Failed to download $model"
 done
 unset HF_HOME
 echo ">>> Model pre-cache complete"
@@ -261,6 +261,7 @@ import http.server
 import json
 import os
 import subprocess
+import threading
 import time
 import urllib.request
 
@@ -270,6 +271,9 @@ AVAILABLE_MODELS = [
     "Qwen/Qwen3-0.6B",
     "mistralai/Mistral-7B-Instruct-v0.3",
 ]
+
+_switch_lock = threading.Lock()
+_switching_to = None
 
 def get_current_model():
     try:
@@ -281,6 +285,19 @@ def get_current_model():
         pass
     return AVAILABLE_MODELS[0]
 
+def wait_for_model(model, timeout=180):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            resp = urllib.request.urlopen("http://localhost:8002/v1/models", timeout=2)
+            data = json.loads(resp.read())
+            if any(m["id"] == model for m in data.get("data", [])):
+                return True
+        except Exception:
+            pass
+        time.sleep(3)
+    return False
+
 def switch_model(model):
     with open(os.path.join(COMPOSE_DIR, ".env"), "w") as f:
         f.write(f"LLM_ACTIVE_MODEL={model}\n")
@@ -290,16 +307,7 @@ def switch_model(model):
         cwd=COMPOSE_DIR, check=True,
     )
 
-    for _ in range(120):
-        try:
-            resp = urllib.request.urlopen("http://localhost:8002/v1/models", timeout=2)
-            data = json.loads(resp.read())
-            if any(m["id"] == model for m in data.get("data", [])):
-                return True
-        except Exception:
-            pass
-        time.sleep(5)
-    return False
+    return wait_for_model(model)
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
@@ -317,31 +325,56 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json(200, {"model": model, "status": "already_active"})
                 return
 
-            print(f"Switching LLM: {current} -> {model}")
-            if switch_model(model):
-                self._json(200, {"model": model, "status": "ready"})
-            else:
-                self._json(504, {"model": model, "status": "timeout"})
+            global _switching_to
+            acquired = _switch_lock.acquire(blocking=False)
+            if not acquired:
+                if _switching_to == model:
+                    print(f"Switch to {model} already in progress, waiting...")
+                    if wait_for_model(model):
+                        self._json(200, {"model": model, "status": "ready"})
+                    else:
+                        self._json(504, {"model": model, "status": "timeout"})
+                    return
+                else:
+                    self._json(409, {"error": "switch in progress", "switching_to": _switching_to})
+                    return
+
+            try:
+                _switching_to = model
+                print(f"Switching LLM: {current} -> {model}")
+                if switch_model(model):
+                    self._json(200, {"model": model, "status": "ready"})
+                else:
+                    self._json(504, {"model": model, "status": "timeout"})
+            finally:
+                _switching_to = None
+                _switch_lock.release()
         else:
             self._json(404, {"error": "not found"})
 
     def do_GET(self):
         if self.path == "/llm-status":
-            self._json(200, {"model": get_current_model(), "available": AVAILABLE_MODELS})
+            status = {"model": get_current_model(), "available": AVAILABLE_MODELS}
+            if _switching_to:
+                status["switching_to"] = _switching_to
+            self._json(200, status)
         else:
             self._json(404, {"error": "not found"})
 
     def _json(self, code, data):
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+        except BrokenPipeError:
+            print(f"Client disconnected before response (code={code})")
 
     def log_message(self, fmt, *args):
         print(fmt % args)
 
 if __name__ == "__main__":
-    server = http.server.HTTPServer(("0.0.0.0", 8006), Handler)
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", 8006), Handler)
     print("Model manager listening on :8006")
     server.serve_forever()
 MMEOF
