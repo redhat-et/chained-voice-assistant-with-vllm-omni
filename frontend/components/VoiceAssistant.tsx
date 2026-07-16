@@ -73,15 +73,19 @@ export default function VoiceAssistant() {
   const [statusMsg, setStatusMsg] = useState("");
   const [available, setAvailable] = useState<AvailableModels | null>(null);
   const [activeLlm, setActiveLlm] = useState("");
+  const [activeTts, setActiveTts] = useState("");
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
 
   useEffect(() => {
     fetch("/api/models")
       .then((r) => r.json())
-      .then((data: AvailableModels & { llm_active?: string }) => {
+      .then((data: AvailableModels & { llm_active?: string; tts_active?: string }) => {
         setAvailable(data);
-        setActiveLlm(data.llm_active ?? data.llm[0] ?? "");
-        setModelSelection(defaultSelectionFromAvailable(data));
+        const llmActive = data.llm_active ?? data.llm[0] ?? "";
+        const ttsActive = data.tts_active ?? data.tts[0] ?? "";
+        setActiveLlm(llmActive);
+        setActiveTts(ttsActive);
+        setModelSelection(defaultSelectionFromAvailable(data, llmActive, ttsActive));
       })
       .catch(() => {
         setModelSelection(defaultSelectionFromAvailable({ stt: [], llm: [], tts: [] }));
@@ -92,9 +96,24 @@ export default function VoiceAssistant() {
     if (!modelSelection) return;
     setConnecting(true);
     try {
+      if (modelSelection.tts_model !== activeTts) {
+        const shortName = modelSelection.tts_model.split("/").pop() ?? modelSelection.tts_model;
+        setStatusMsg(`Loading TTS ${shortName}...`);
+        const switchRes = await fetch("/api/switch-tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelSelection.tts_model }),
+        });
+        if (!switchRes.ok) {
+          const err = await switchRes.json();
+          throw new Error(err.error || "Failed to switch TTS model");
+        }
+        setActiveTts(modelSelection.tts_model);
+      }
+
       if (modelSelection.llm_model !== activeLlm) {
         const shortName = modelSelection.llm_model.split("/").pop() ?? modelSelection.llm_model;
-        setStatusMsg(`Loading ${shortName}...`);
+        setStatusMsg(`Loading LLM ${shortName}...`);
         const switchRes = await fetch("/api/switch-llm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -122,7 +141,7 @@ export default function VoiceAssistant() {
       setConnecting(false);
       setStatusMsg("");
     }
-  }, [modelSelection, activeLlm]);
+  }, [modelSelection, activeLlm, activeTts]);
 
   const handleDisconnected = useCallback(() => {
     setConnectionDetails(null);

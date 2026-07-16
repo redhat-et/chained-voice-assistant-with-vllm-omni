@@ -51,10 +51,10 @@ function buildModelList(availableIds: string[]): ModelOption[] {
   return toShow.map(modelOptionFromId);
 }
 
-export function defaultSelectionFromAvailable(available: AvailableModels): ModelSelection {
+export function defaultSelectionFromAvailable(available: AvailableModels, activeLlm?: string, activeTts?: string): ModelSelection {
   const sttModel = available.stt[0] ?? "Systran/faster-whisper-large-v3";
-  const llmModel = available.llm[0] ?? "google/gemma-3-4b-it";
-  const ttsId = available.tts[0] ?? "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice";
+  const llmModel = activeLlm || available.llm[0] || "google/gemma-3-4b-it";
+  const ttsId = activeTts || available.tts[0] || "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice";
   const ttsEntry = MODEL_CATALOG[ttsId];
   return {
     stt_model: sttModel,

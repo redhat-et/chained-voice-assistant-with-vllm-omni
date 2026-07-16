@@ -15,38 +15,39 @@ async function fetchModels(baseUrl: string): Promise<string[]> {
   }
 }
 
-interface LlmStatus {
+interface ServiceStatus {
   model: string;
   available: string[];
 }
 
-async function fetchLlmStatus(managerUrl: string): Promise<LlmStatus> {
+async function fetchServiceStatus(managerUrl: string, endpoint: string, fallbackUrl: string): Promise<ServiceStatus> {
   try {
-    const res = await fetch(`${managerUrl}/llm-status`, { signal: AbortSignal.timeout(3000) });
+    const res = await fetch(`${managerUrl}/${endpoint}`, { signal: AbortSignal.timeout(3000) });
     if (!res.ok) throw new Error("manager unavailable");
     return await res.json();
   } catch {
-    const llmUrl = process.env.LLM_BASE_URL ?? "http://llm:8002";
-    const loaded = await fetchModels(llmUrl);
+    const loaded = await fetchModels(fallbackUrl);
     return { model: loaded[0] ?? "", available: loaded };
   }
 }
 
 export async function GET() {
   const sttUrl = process.env.STT_BASE_URL ?? "http://stt:8000";
-  const ttsUrl = process.env.TTS_BASE_URL ?? "http://tts:8003";
   const managerUrl = process.env.MODEL_MANAGER_URL ?? "http://host.docker.internal:8006";
+  const llmFallback = process.env.LLM_BASE_URL ?? "http://llm:8002";
+  const ttsFallback = process.env.TTS_BASE_URL ?? "http://tts:8003";
 
-  const [stt, llmStatus, tts] = await Promise.all([
+  const [stt, llmStatus, ttsStatus] = await Promise.all([
     fetchModels(sttUrl),
-    fetchLlmStatus(managerUrl),
-    fetchModels(ttsUrl),
+    fetchServiceStatus(managerUrl, "llm-status", llmFallback),
+    fetchServiceStatus(managerUrl, "tts-status", ttsFallback),
   ]);
 
   return NextResponse.json({
     stt,
     llm: llmStatus.available,
-    tts,
+    tts: ttsStatus.available,
     llm_active: llmStatus.model,
+    tts_active: ttsStatus.model,
   });
 }

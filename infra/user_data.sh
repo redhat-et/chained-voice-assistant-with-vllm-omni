@@ -8,6 +8,7 @@ TTS_GPU_UTIL="${tts_gpu_util}"
 LLM_GPU_UTIL="${llm_gpu_util}"
 
 DEFAULT_LLM="google/gemma-3-4b-it"
+DEFAULT_TTS="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 
 REPO_URL="https://github.com/redhat-et/chained-voice-assistant-with-vllm-omni.git"
 REPO_BRANCH="feature/runtime-model-selection"
@@ -86,13 +87,15 @@ git clone -b "$REPO_BRANCH" "$REPO_URL" "$WORKDIR"
 cd "$WORKDIR"
 
 # -----------------------------------------------------------------------
-# 5. Pre-cache LLM models so swapping is instant (loads from disk)
+# 5. Pre-cache LLM + TTS models so swapping is instant (loads from disk)
 # -----------------------------------------------------------------------
-echo ">>> Pre-caching LLM models to /opt/hf-cache..."
+echo ">>> Pre-caching models to /opt/hf-cache..."
 mkdir -p /opt/hf-cache
 pip3 install -q huggingface-hub
 export HF_HOME=/opt/hf-cache
-for model in "google/gemma-3-4b-it" "Qwen/Qwen3-0.6B" "mistralai/Mistral-7B-Instruct-v0.3"; do
+for model in \
+  "google/gemma-3-4b-it" "Qwen/Qwen3-0.6B" "mistralai/Mistral-7B-Instruct-v0.3" \
+  "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice" "mistralai/Voxtral-4B-TTS-2603"; do
   echo ">>> Downloading $model..."
   hf download "$model" --token "$HF_TOKEN" 2>&1 || echo "WARNING: Failed to download $model"
 done
@@ -115,10 +118,11 @@ keys:
 LKEOF
 
 # -----------------------------------------------------------------------
-# 7. .env for docker-compose — LLM_ACTIVE_MODEL is swapped at runtime
+# 7. .env for docker-compose — active models swapped at runtime
 # -----------------------------------------------------------------------
 cat > .env <<ENVEOF
 LLM_ACTIVE_MODEL=$DEFAULT_LLM
+TTS_ACTIVE_MODEL=$DEFAULT_TTS
 ENVEOF
 
 # -----------------------------------------------------------------------
@@ -126,6 +130,7 @@ ENVEOF
 #
 # Key points:
 #   - Single LLM container using ${LLM_ACTIVE_MODEL} from .env
+#   - Single TTS container using ${TTS_ACTIVE_MODEL} from .env
 #   - HF cache mounted so model swaps load from disk, not network
 #   - Model manager on host (port 8006) handles stop/start via docker compose
 #   - LiveKit uses host networking for proper ICE candidate advertisement
@@ -158,7 +163,7 @@ services:
     environment:
       - "HF_TOKEN=$HF_TOKEN"
     command: >-
-      vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+      vllm serve \${TTS_ACTIVE_MODEL}
       --omni
       --host 0.0.0.0
       --port 8003
@@ -221,7 +226,7 @@ services:
       - LLM_BASE_URL=http://llm:8002/v1
       - LLM_MODEL=$DEFAULT_LLM
       - TTS_BASE_URL=http://tts:8003/v1
-      - TTS_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+      - TTS_MODEL=$DEFAULT_TTS
       - TTS_VOICE=vivian
     restart: unless-stopped
 
@@ -249,13 +254,13 @@ DCEOF
 echo ">>> docker-compose.yml generated"
 
 # -----------------------------------------------------------------------
-# 9. Model manager — host-level API that swaps the LLM container
+# 9. Model manager — host-level API that swaps LLM and TTS containers
 # -----------------------------------------------------------------------
 cat > /opt/voice-pipeline/model-manager.py <<'MMEOF'
 #!/usr/bin/env python3
-"""Host-level HTTP API that swaps the active LLM model by restarting
-the vLLM container via docker compose. Models are pre-cached so swaps
-load from disk (~10-30s) not network."""
+"""Host-level HTTP API that swaps the active LLM or TTS model by
+restarting the relevant vLLM container via docker compose. Models are
+pre-cached so swaps load from disk, not network."""
 
 import http.server
 import json
@@ -266,30 +271,53 @@ import time
 import urllib.request
 
 COMPOSE_DIR = "/opt/voice-pipeline"
-AVAILABLE_MODELS = [
+
+AVAILABLE_LLM = [
     "google/gemma-3-4b-it",
     "Qwen/Qwen3-0.6B",
     "mistralai/Mistral-7B-Instruct-v0.3",
 ]
+AVAILABLE_TTS = [
+    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "mistralai/Voxtral-4B-TTS-2603",
+]
 
-_switch_lock = threading.Lock()
-_switching_to = None
+SERVICES = {
+    "llm": {"env_key": "LLM_ACTIVE_MODEL", "port": 8002, "available": AVAILABLE_LLM, "service": "llm"},
+    "tts": {"env_key": "TTS_ACTIVE_MODEL", "port": 8003, "available": AVAILABLE_TTS, "service": "tts"},
+}
 
-def get_current_model():
+_locks = {k: threading.Lock() for k in SERVICES}
+_switching = {k: None for k in SERVICES}
+
+def read_env():
+    vals = {}
     try:
         with open(os.path.join(COMPOSE_DIR, ".env")) as f:
             for line in f:
-                if line.startswith("LLM_ACTIVE_MODEL="):
-                    return line.strip().split("=", 1)[1]
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    vals[k] = v
     except FileNotFoundError:
         pass
-    return AVAILABLE_MODELS[0]
+    return vals
 
-def wait_for_model(model, timeout=180):
+def write_env(vals):
+    with open(os.path.join(COMPOSE_DIR, ".env"), "w") as f:
+        for k, v in vals.items():
+            f.write(f"{k}={v}\n")
+
+def get_active(kind):
+    cfg = SERVICES[kind]
+    vals = read_env()
+    return vals.get(cfg["env_key"], cfg["available"][0])
+
+def wait_for_model(model, port, timeout=180):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = urllib.request.urlopen("http://localhost:8002/v1/models", timeout=2)
+            resp = urllib.request.urlopen(f"http://localhost:{port}/v1/models", timeout=2)
             data = json.loads(resp.read())
             if any(m["id"] == model for m in data.get("data", [])):
                 return True
@@ -298,65 +326,79 @@ def wait_for_model(model, timeout=180):
         time.sleep(3)
     return False
 
-def switch_model(model):
-    with open(os.path.join(COMPOSE_DIR, ".env"), "w") as f:
-        f.write(f"LLM_ACTIVE_MODEL={model}\n")
+def switch(kind, model):
+    cfg = SERVICES[kind]
+    vals = read_env()
+    vals[cfg["env_key"]] = model
+    write_env(vals)
 
     subprocess.run(
-        ["docker", "compose", "up", "-d", "--no-deps", "llm"],
+        ["docker", "compose", "up", "-d", "--no-deps", cfg["service"]],
         cwd=COMPOSE_DIR, check=True,
     )
 
-    return wait_for_model(model)
+    return wait_for_model(model, cfg["port"])
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
+        kind = None
         if self.path == "/switch-llm":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
-            model = body.get("model", "")
+            kind = "llm"
+        elif self.path == "/switch-tts":
+            kind = "tts"
 
-            if model not in AVAILABLE_MODELS:
-                self._json(400, {"error": f"unknown model: {model}", "available": AVAILABLE_MODELS})
-                return
+        if kind is None:
+            self._json(404, {"error": "not found"})
+            return
 
-            current = get_current_model()
-            if model == current:
-                self._json(200, {"model": model, "status": "already_active"})
-                return
+        cfg = SERVICES[kind]
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length))
+        model = body.get("model", "")
 
-            global _switching_to
-            acquired = _switch_lock.acquire(blocking=False)
-            if not acquired:
-                if _switching_to == model:
-                    print(f"Switch to {model} already in progress, waiting...")
-                    if wait_for_model(model):
-                        self._json(200, {"model": model, "status": "ready"})
-                    else:
-                        self._json(504, {"model": model, "status": "timeout"})
-                    return
-                else:
-                    self._json(409, {"error": "switch in progress", "switching_to": _switching_to})
-                    return
+        if model not in cfg["available"]:
+            self._json(400, {"error": f"unknown model: {model}", "available": cfg["available"]})
+            return
 
-            try:
-                _switching_to = model
-                print(f"Switching LLM: {current} -> {model}")
-                if switch_model(model):
+        current = get_active(kind)
+        if model == current:
+            self._json(200, {"model": model, "status": "already_active"})
+            return
+
+        acquired = _locks[kind].acquire(blocking=False)
+        if not acquired:
+            if _switching[kind] == model:
+                print(f"Switch {kind} to {model} already in progress, waiting...")
+                if wait_for_model(model, cfg["port"]):
                     self._json(200, {"model": model, "status": "ready"})
                 else:
                     self._json(504, {"model": model, "status": "timeout"})
-            finally:
-                _switching_to = None
-                _switch_lock.release()
-        else:
-            self._json(404, {"error": "not found"})
+                return
+            else:
+                self._json(409, {"error": f"{kind} switch in progress", "switching_to": _switching[kind]})
+                return
+
+        try:
+            _switching[kind] = model
+            print(f"Switching {kind.upper()}: {current} -> {model}")
+            if switch(kind, model):
+                self._json(200, {"model": model, "status": "ready"})
+            else:
+                self._json(504, {"model": model, "status": "timeout"})
+        finally:
+            _switching[kind] = None
+            _locks[kind].release()
 
     def do_GET(self):
         if self.path == "/llm-status":
-            status = {"model": get_current_model(), "available": AVAILABLE_MODELS}
-            if _switching_to:
-                status["switching_to"] = _switching_to
+            status = {"model": get_active("llm"), "available": AVAILABLE_LLM}
+            if _switching["llm"]:
+                status["switching_to"] = _switching["llm"]
+            self._json(200, status)
+        elif self.path == "/tts-status":
+            status = {"model": get_active("tts"), "available": AVAILABLE_TTS}
+            if _switching["tts"]:
+                status["switching_to"] = _switching["tts"]
             self._json(200, status)
         else:
             self._json(404, {"error": "not found"})
@@ -411,7 +453,7 @@ docker compose up -d tts
 
 echo ">>> Waiting for TTS model to load..."
 for i in $(seq 1 180); do
-  if curl -s http://localhost:8003/v1/models 2>/dev/null | grep -q "Qwen"; then
+  if curl -s http://localhost:8003/v1/models 2>/dev/null | grep -qi "qwen\|voxtral"; then
     echo ">>> TTS ready after ~$((i * 10))s"
     break
   fi
