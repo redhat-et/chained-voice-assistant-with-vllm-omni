@@ -22,13 +22,14 @@ export interface AvailableModels {
 }
 
 const MODEL_CATALOG: Record<string, Omit<ModelOption, "id">> = {
-  "Systran/faster-whisper-large-v3": { name: "Whisper Large v3", provenance: "France", flag: "\u{1F1EB}\u{1F1F7}" },
-  "Systran/faster-whisper-base": { name: "Whisper Base", provenance: "France", flag: "\u{1F1EB}\u{1F1F7}" },
+  "Systran/faster-whisper-large-v3": { name: "Whisper Large v3", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
+  "Systran/faster-whisper-base": { name: "Whisper Base", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
   "google/gemma-3-4b-it": { name: "Gemma 3 4B", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
   "RedHatAI/gemma-3-4b-it-quantized.w4a16": { name: "Gemma 3 4B (INT4)", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
   "Qwen/Qwen3-0.6B": { name: "Qwen3 0.6B", provenance: "China", flag: "\u{1F1E8}\u{1F1F3}" },
   "meta-llama/Llama-3.1-8B-Instruct": { name: "Llama 3.1 8B", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
   "mistralai/Mistral-7B-Instruct-v0.3": { name: "Mistral 7B", provenance: "EU", flag: "\u{1F1EA}\u{1F1FA}" },
+  "Qwen/Qwen3-ASR-0.6B": { name: "Qwen3 ASR 0.6B", provenance: "China", flag: "\u{1F1E8}\u{1F1F3}" },
   "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice": { name: "Qwen3 TTS 1.7B", provenance: "China", flag: "\u{1F1E8}\u{1F1F3}", voice: "vivian" },
   "mistralai/Voxtral-4B-TTS-2603": { name: "Voxtral 4B", provenance: "EU", flag: "\u{1F1EA}\u{1F1FA}", voice: "casual_male" },
 };
@@ -51,8 +52,8 @@ function buildModelList(availableIds: string[]): ModelOption[] {
   return toShow.map(modelOptionFromId);
 }
 
-export function defaultSelectionFromAvailable(available: AvailableModels, activeLlm?: string, activeTts?: string): ModelSelection {
-  const sttModel = available.stt[0] ?? "Systran/faster-whisper-large-v3";
+export function defaultSelectionFromAvailable(available: AvailableModels, activeLlm?: string, activeTts?: string, activeStt?: string): ModelSelection {
+  const sttModel = activeStt || available.stt[0] || "Systran/faster-whisper-large-v3";
   const llmModel = activeLlm || available.llm[0] || "google/gemma-3-4b-it";
   const ttsId = activeTts || available.tts[0] || "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice";
   const ttsEntry = MODEL_CATALOG[ttsId];

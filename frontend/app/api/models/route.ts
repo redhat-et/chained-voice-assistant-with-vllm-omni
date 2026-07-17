@@ -32,21 +32,22 @@ async function fetchServiceStatus(managerUrl: string, endpoint: string, fallback
 }
 
 export async function GET() {
-  const sttUrl = process.env.STT_BASE_URL ?? "http://stt:8000";
   const managerUrl = process.env.MODEL_MANAGER_URL ?? "http://host.docker.internal:8006";
+  const sttFallback = process.env.STT_BASE_URL ?? "http://stt:8000";
   const llmFallback = process.env.LLM_BASE_URL ?? "http://llm:8002";
   const ttsFallback = process.env.TTS_BASE_URL ?? "http://tts:8003";
 
-  const [stt, llmStatus, ttsStatus] = await Promise.all([
-    fetchModels(sttUrl),
+  const [sttStatus, llmStatus, ttsStatus] = await Promise.all([
+    fetchServiceStatus(managerUrl, "stt-status", sttFallback),
     fetchServiceStatus(managerUrl, "llm-status", llmFallback),
     fetchServiceStatus(managerUrl, "tts-status", ttsFallback),
   ]);
 
   return NextResponse.json({
-    stt,
+    stt: sttStatus.available,
     llm: llmStatus.available,
     tts: ttsStatus.available,
+    stt_active: sttStatus.model,
     llm_active: llmStatus.model,
     tts_active: ttsStatus.model,
   });

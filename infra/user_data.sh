@@ -7,6 +7,7 @@ HF_TOKEN="${hf_token}"
 TTS_GPU_UTIL="${tts_gpu_util}"
 LLM_GPU_UTIL="${llm_gpu_util}"
 
+DEFAULT_STT="Systran/faster-whisper-large-v3"
 DEFAULT_LLM="google/gemma-3-4b-it"
 DEFAULT_TTS="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 
@@ -102,6 +103,10 @@ done
 unset HF_HOME
 echo ">>> Model pre-cache complete"
 
+echo ">>> Pre-pulling STT Docker images..."
+docker pull lancelrq/qwen3-asr-service:latest-cpu &
+QWEN_ASR_PULL_PID=$!
+
 # -----------------------------------------------------------------------
 # 6. LiveKit config — WebRTC needs UDP port range + external IP discovery
 # -----------------------------------------------------------------------
@@ -121,6 +126,7 @@ LKEOF
 # 7. .env for docker-compose — active models swapped at runtime
 # -----------------------------------------------------------------------
 cat > .env <<ENVEOF
+STT_ACTIVE_MODEL=$DEFAULT_STT
 LLM_ACTIVE_MODEL=$DEFAULT_LLM
 TTS_ACTIVE_MODEL=$DEFAULT_TTS
 ENVEOF
@@ -148,12 +154,21 @@ services:
     command: --config /etc/livekit.yaml
     restart: unless-stopped
 
-  stt:
+  stt-whisper:
     image: fedirz/faster-whisper-server:0.5-cpu
     environment:
       - WHISPER__MODEL=Systran/faster-whisper-large-v3
     ports:
       - "8001:8000"
+    restart: unless-stopped
+
+  stt-qwen:
+    image: lancelrq/qwen3-asr-service:latest-cpu
+    command: --device cpu --model-size 0.6b --port 8000 --enable-openai-api
+    ports:
+      - "8001:8000"
+    profiles:
+      - stt-qwen
     restart: unless-stopped
 
   tts:
@@ -162,7 +177,6 @@ services:
     shm_size: "8g"
     environment:
       - "HF_TOKEN=$HF_TOKEN"
-      - HF_HUB_OFFLINE=1
     command: >-
       vllm serve \${TTS_ACTIVE_MODEL}
       --omni
@@ -216,15 +230,17 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - livekit
-      - stt
+      - stt-whisper
       - llm
       - tts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - LIVEKIT_URL=ws://$PRIVATE_IP:7880
       - LIVEKIT_API_KEY=devkey
       - LIVEKIT_API_SECRET=secret
-      - STT_BASE_URL=http://stt:8000/v1
-      - STT_MODEL=Systran/faster-whisper-large-v3
+      - STT_BASE_URL=http://host.docker.internal:8001/v1
+      - STT_MODEL=$DEFAULT_STT
       - LLM_BASE_URL=http://llm:8002/v1
       - LLM_MODEL=$DEFAULT_LLM
       - TTS_BASE_URL=http://tts:8003/v1
@@ -260,9 +276,9 @@ echo ">>> docker-compose.yml generated"
 # -----------------------------------------------------------------------
 cat > /opt/voice-pipeline/model-manager.py <<'MMEOF'
 #!/usr/bin/env python3
-"""Host-level HTTP API that swaps the active LLM or TTS model by
-restarting the relevant vLLM container via docker compose. Models are
-pre-cached so swaps load from disk, not network."""
+"""Host-level HTTP API that swaps active STT, LLM, and TTS models.
+LLM/TTS swap by restarting the same container with a different model env var.
+STT swaps by stopping one container and starting another (different engines)."""
 
 import http.server
 import json
@@ -274,6 +290,10 @@ import urllib.request
 
 COMPOSE_DIR = "/opt/voice-pipeline"
 
+AVAILABLE_STT = [
+    "Systran/faster-whisper-large-v3",
+    "Qwen/Qwen3-ASR-0.6B",
+]
 AVAILABLE_LLM = [
     "google/gemma-3-4b-it",
     "Qwen/Qwen3-0.6B",
@@ -284,13 +304,18 @@ AVAILABLE_TTS = [
     "mistralai/Voxtral-4B-TTS-2603",
 ]
 
+STT_CONTAINERS = {
+    "Systran/faster-whisper-large-v3": "stt-whisper",
+    "Qwen/Qwen3-ASR-0.6B": "stt-qwen",
+}
+
 SERVICES = {
     "llm": {"env_key": "LLM_ACTIVE_MODEL", "port": 8002, "available": AVAILABLE_LLM, "service": "llm"},
     "tts": {"env_key": "TTS_ACTIVE_MODEL", "port": 8003, "available": AVAILABLE_TTS, "service": "tts"},
 }
 
-_locks = {k: threading.Lock() for k in SERVICES}
-_switching = {k: None for k in SERVICES}
+_locks = {"stt": threading.Lock(), "llm": threading.Lock(), "tts": threading.Lock()}
+_switching = {"stt": None, "llm": None, "tts": None}
 
 def read_env():
     vals = {}
@@ -311,9 +336,24 @@ def write_env(vals):
             f.write(f"{k}={v}\n")
 
 def get_active(kind):
+    if kind == "stt":
+        vals = read_env()
+        return vals.get("STT_ACTIVE_MODEL", AVAILABLE_STT[0])
     cfg = SERVICES[kind]
     vals = read_env()
     return vals.get(cfg["env_key"], cfg["available"][0])
+
+def wait_for_port(port, timeout=120):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            resp = urllib.request.urlopen(f"http://localhost:{port}/v1/models", timeout=2)
+            if resp.status == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(3)
+    return False
 
 def wait_for_model(model, port, timeout=180):
     deadline = time.monotonic() + timeout
@@ -327,6 +367,26 @@ def wait_for_model(model, port, timeout=180):
             pass
         time.sleep(3)
     return False
+
+def switch_stt(model):
+    current = get_active("stt")
+    old_container = STT_CONTAINERS[current]
+    new_container = STT_CONTAINERS[model]
+
+    vals = read_env()
+    vals["STT_ACTIVE_MODEL"] = model
+    write_env(vals)
+
+    subprocess.run(
+        ["docker", "compose", "stop", old_container],
+        cwd=COMPOSE_DIR, check=True,
+    )
+    subprocess.run(
+        ["docker", "compose", "up", "-d", "--no-deps", new_container],
+        cwd=COMPOSE_DIR, check=True,
+    )
+
+    return wait_for_port(8001)
 
 def switch(kind, model):
     cfg = SERVICES[kind]
@@ -343,23 +403,22 @@ def switch(kind, model):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        kind = None
-        if self.path == "/switch-llm":
-            kind = "llm"
-        elif self.path == "/switch-tts":
-            kind = "tts"
-
-        if kind is None:
-            self._json(404, {"error": "not found"})
-            return
-
-        cfg = SERVICES[kind]
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length))
         model = body.get("model", "")
 
-        if model not in cfg["available"]:
-            self._json(400, {"error": f"unknown model: {model}", "available": cfg["available"]})
+        if self.path == "/switch-stt":
+            self._handle_switch("stt", model, AVAILABLE_STT, switch_stt)
+        elif self.path == "/switch-llm":
+            self._handle_switch("llm", model, AVAILABLE_LLM, lambda m: switch("llm", m))
+        elif self.path == "/switch-tts":
+            self._handle_switch("tts", model, AVAILABLE_TTS, lambda m: switch("tts", m))
+        else:
+            self._json(404, {"error": "not found"})
+
+    def _handle_switch(self, kind, model, available, do_switch):
+        if model not in available:
+            self._json(400, {"error": f"unknown model: {model}", "available": available})
             return
 
         current = get_active(kind)
@@ -371,7 +430,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not acquired:
             if _switching[kind] == model:
                 print(f"Switch {kind} to {model} already in progress, waiting...")
-                if wait_for_model(model, cfg["port"]):
+                port = 8001 if kind == "stt" else SERVICES[kind]["port"]
+                if wait_for_port(port):
                     self._json(200, {"model": model, "status": "ready"})
                 else:
                     self._json(504, {"model": model, "status": "timeout"})
@@ -383,7 +443,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             _switching[kind] = model
             print(f"Switching {kind.upper()}: {current} -> {model}")
-            if switch(kind, model):
+            if do_switch(model):
                 self._json(200, {"model": model, "status": "ready"})
             else:
                 self._json(504, {"model": model, "status": "timeout"})
@@ -392,7 +452,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _locks[kind].release()
 
     def do_GET(self):
-        if self.path == "/llm-status":
+        if self.path == "/stt-status":
+            status = {"model": get_active("stt"), "available": AVAILABLE_STT}
+            if _switching["stt"]:
+                status["switching_to"] = _switching["stt"]
+            self._json(200, status)
+        elif self.path == "/llm-status":
             status = {"model": get_active("llm"), "available": AVAILABLE_LLM}
             if _switching["llm"]:
                 status["switching_to"] = _switching["llm"]
@@ -447,8 +512,11 @@ echo ">>> Model manager started on port 8006"
 # -----------------------------------------------------------------------
 # 10. Sequential GPU startup
 # -----------------------------------------------------------------------
+echo ">>> Waiting for Qwen3-ASR image pull..."
+wait $QWEN_ASR_PULL_PID || echo "WARNING: Qwen3-ASR image pull failed"
+
 echo ">>> Starting non-GPU services..."
-docker compose up -d livekit stt
+docker compose up -d livekit stt-whisper
 
 echo ">>> Starting TTS (GPU service 1/2)..."
 docker compose up -d tts

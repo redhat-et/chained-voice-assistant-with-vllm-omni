@@ -72,6 +72,7 @@ export default function VoiceAssistant() {
   const [connecting, setConnecting] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
   const [available, setAvailable] = useState<AvailableModels | null>(null);
+  const [activeStt, setActiveStt] = useState("");
   const [activeLlm, setActiveLlm] = useState("");
   const [activeTts, setActiveTts] = useState("");
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
@@ -79,13 +80,15 @@ export default function VoiceAssistant() {
   useEffect(() => {
     fetch("/api/models")
       .then((r) => r.json())
-      .then((data: AvailableModels & { llm_active?: string; tts_active?: string }) => {
+      .then((data: AvailableModels & { stt_active?: string; llm_active?: string; tts_active?: string }) => {
         setAvailable(data);
+        const sttActive = data.stt_active ?? data.stt[0] ?? "";
         const llmActive = data.llm_active ?? data.llm[0] ?? "";
         const ttsActive = data.tts_active ?? data.tts[0] ?? "";
+        setActiveStt(sttActive);
         setActiveLlm(llmActive);
         setActiveTts(ttsActive);
-        setModelSelection(defaultSelectionFromAvailable(data, llmActive, ttsActive));
+        setModelSelection(defaultSelectionFromAvailable(data, llmActive, ttsActive, sttActive));
       })
       .catch(() => {
         setModelSelection(defaultSelectionFromAvailable({ stt: [], llm: [], tts: [] }));
@@ -96,6 +99,21 @@ export default function VoiceAssistant() {
     if (!modelSelection) return;
     setConnecting(true);
     try {
+      if (modelSelection.stt_model !== activeStt) {
+        const shortName = modelSelection.stt_model.split("/").pop() ?? modelSelection.stt_model;
+        setStatusMsg(`Loading STT ${shortName}...`);
+        const switchRes = await fetch("/api/switch-stt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelSelection.stt_model }),
+        });
+        if (!switchRes.ok) {
+          const err = await switchRes.json();
+          throw new Error(err.error || "Failed to switch STT model");
+        }
+        setActiveStt(modelSelection.stt_model);
+      }
+
       if (modelSelection.tts_model !== activeTts) {
         const shortName = modelSelection.tts_model.split("/").pop() ?? modelSelection.tts_model;
         setStatusMsg(`Loading TTS ${shortName}...`);
@@ -141,7 +159,7 @@ export default function VoiceAssistant() {
       setConnecting(false);
       setStatusMsg("");
     }
-  }, [modelSelection, activeLlm, activeTts]);
+  }, [modelSelection, activeStt, activeLlm, activeTts]);
 
   const handleDisconnected = useCallback(() => {
     setConnectionDetails(null);
