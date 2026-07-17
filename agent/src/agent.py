@@ -26,8 +26,15 @@ load_dotenv(".env.local")
 logger = logging.getLogger("voice-assistant")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s - %(message)s')
 
-STT_BASE_URL = os.getenv("STT_BASE_URL", "http://localhost:8001/v1")
+STT_HOST = os.getenv("STT_BASE_URL", "http://localhost:8001/v1").rstrip("/").rsplit("/v1", 1)[0]
 STT_MODEL = os.getenv("STT_MODEL", "Systran/faster-whisper-large-v3")
+
+STT_PATHS = {
+    "Qwen/Qwen3-ASR-0.6B": "/compat/openai/v1",
+}
+
+def stt_base_url(model: str) -> str:
+    return STT_HOST + STT_PATHS.get(model, "/v1")
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8002/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-3-4b-it")
@@ -39,6 +46,38 @@ TTS_VOICE = os.getenv("TTS_VOICE", "vivian")
 server = AgentServer()
 
 
+def resolve_models(raw_meta, defaults):
+    stt, llm, tts, voice = defaults["stt"], defaults["llm"], defaults["tts"], defaults["voice"]
+    sources = {"stt": "env", "llm": "env", "tts": "env", "voice": "env"}
+
+    if raw_meta and raw_meta.strip():
+        try:
+            meta = json.loads(raw_meta)
+            if meta.get("stt_model"):
+                stt = meta["stt_model"]
+                sources["stt"] = "metadata"
+            if meta.get("llm_model"):
+                llm = meta["llm_model"]
+                sources["llm"] = "metadata"
+            if meta.get("tts_model"):
+                tts = meta["tts_model"]
+                sources["tts"] = "metadata"
+            if meta.get("tts_voice"):
+                voice = meta["tts_voice"]
+                sources["voice"] = "metadata"
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return {"stt": stt, "llm": llm, "tts": tts, "voice": voice}, sources
+
+
+def build_instructions(llm_model):
+    instructions = "You are a helpful voice assistant. Respond naturally and concisely."
+    if "qwen" in llm_model.lower():
+        instructions += " /no_think"
+    return instructions
+
+
 class VoiceAssistant(Agent):
     def __init__(self, instructions: str = "You are a helpful voice assistant. Respond naturally and concisely.") -> None:
         super().__init__(instructions=instructions)
@@ -48,29 +87,13 @@ class VoiceAssistant(Agent):
 async def entrypoint(ctx: JobContext):
     logger.info("=== Disaggregated Voice Pipeline ===")
 
-    stt_model, llm_model, tts_model, tts_voice = STT_MODEL, LLM_MODEL, TTS_MODEL, TTS_VOICE
-    sources = {"stt": "env", "llm": "env", "tts": "env", "voice": "env"}
-
+    defaults = {"stt": STT_MODEL, "llm": LLM_MODEL, "tts": TTS_MODEL, "voice": TTS_VOICE}
     raw_meta = getattr(ctx.job, "metadata", None) or ""
-    if raw_meta.strip():
-        try:
-            meta = json.loads(raw_meta)
-            if meta.get("stt_model"):
-                stt_model = meta["stt_model"]
-                sources["stt"] = "metadata"
-            if meta.get("llm_model"):
-                llm_model = meta["llm_model"]
-                sources["llm"] = "metadata"
-            if meta.get("tts_model"):
-                tts_model = meta["tts_model"]
-                sources["tts"] = "metadata"
-            if meta.get("tts_voice"):
-                tts_voice = meta["tts_voice"]
-                sources["voice"] = "metadata"
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning("Failed to parse job metadata, using env defaults: %s", e)
+    models, sources = resolve_models(raw_meta, defaults)
+    stt_model, llm_model, tts_model, tts_voice = models["stt"], models["llm"], models["tts"], models["voice"]
 
-    logger.info("STT: model=%s url=%s (source=%s)", stt_model, STT_BASE_URL, sources["stt"])
+    stt_url = stt_base_url(stt_model)
+    logger.info("STT: model=%s url=%s (source=%s)", stt_model, stt_url, sources["stt"])
     logger.info("LLM: model=%s url=%s (source=%s)", llm_model, LLM_BASE_URL, sources["llm"])
     logger.info("TTS: model=%s voice=%s url=%s (source=%s, voice=%s)",
                 tts_model, tts_voice, TTS_BASE_URL, sources["tts"], sources["voice"])
@@ -78,7 +101,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=openai.STT(
             model=stt_model,
-            base_url=STT_BASE_URL,
+            base_url=stt_url,
             api_key="not-needed",
             language="en",
         ),
@@ -165,9 +188,7 @@ async def entrypoint(ctx: JobContext):
                 ctx.room.local_participant.publish_data(timing_payload, topic="timing")
             )
 
-    instructions = "You are a helpful voice assistant. Respond naturally and concisely."
-    if "qwen" in llm_model.lower():
-        instructions += " /no_think"
+    instructions = build_instructions(llm_model)
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     await session.start(agent=VoiceAssistant(instructions=instructions), room=ctx.room)

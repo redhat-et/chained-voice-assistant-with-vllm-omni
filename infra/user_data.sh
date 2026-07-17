@@ -343,11 +343,17 @@ def get_active(kind):
     vals = read_env()
     return vals.get(cfg["env_key"], cfg["available"][0])
 
-def wait_for_port(port, timeout=120):
+STT_HEALTH_PATHS = {
+    "Systran/faster-whisper-large-v3": "/v1/models",
+    "Qwen/Qwen3-ASR-0.6B": "/compat/openai/v1/models",
+}
+
+def wait_for_stt(model, port=8001, timeout=120):
+    path = STT_HEALTH_PATHS.get(model, "/v1/models")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = urllib.request.urlopen(f"http://localhost:{port}/v1/models", timeout=2)
+            resp = urllib.request.urlopen(f"http://localhost:{port}{path}", timeout=2)
             if resp.status == 200:
                 return True
         except Exception:
@@ -386,7 +392,7 @@ def switch_stt(model):
         cwd=COMPOSE_DIR, check=True,
     )
 
-    return wait_for_port(8001)
+    return wait_for_stt(model)
 
 def switch(kind, model):
     cfg = SERVICES[kind]
@@ -430,8 +436,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not acquired:
             if _switching[kind] == model:
                 print(f"Switch {kind} to {model} already in progress, waiting...")
-                port = 8001 if kind == "stt" else SERVICES[kind]["port"]
-                if wait_for_port(port):
+                if kind == "stt":
+                    ok = wait_for_stt(model)
+                else:
+                    ok = wait_for_model(model, SERVICES[kind]["port"])
+                if ok:
                     self._json(200, {"model": model, "status": "ready"})
                 else:
                     self._json(504, {"model": model, "status": "timeout"})
