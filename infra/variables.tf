@@ -43,3 +43,15 @@ variable "root_volume_size" {
   type        = number
   default     = 200
 }
+
+variable "repo_url" {
+  description = "Git repository URL to clone on the instance"
+  type        = string
+  default     = "https://github.com/redhat-et/chained-voice-assistant-with-vllm-omni.git"
+}
+
+variable "repo_branch" {
+  description = "Git branch to checkout"
+  type        = string
+  default     = "main"
+}

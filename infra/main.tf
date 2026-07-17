@@ -161,6 +161,8 @@ resource "aws_instance" "gpu" {
     hf_token     = var.hf_token
     llm_gpu_util = var.llm_gpu_util
     tts_gpu_util = var.tts_gpu_util
+    repo_url     = var.repo_url
+    repo_branch  = var.repo_branch
   })
 
   tags = { Name = "voice-pipeline-gpu" }

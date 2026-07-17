@@ -1,0 +1,11 @@
+key_pair_name = "my-ec2-keypair"
+my_ip         = "203.0.113.1/32"    # Your public IP (whatismyip.com + /32)
+hf_token      = "hf_xxxxxxxxxx"     # HuggingFace token (huggingface.co/settings/tokens)
+
+# Optional overrides:
+# instance_type  = "g6e.2xlarge"    # Default: g6e.2xlarge (L40S 48GB)
+# aws_region     = "eu-north-1"     # Default: eu-north-1
+# llm_gpu_util   = "0.4"            # GPU memory fraction for LLM
+# tts_gpu_util   = "0.4"            # GPU memory fraction for TTS
+# repo_url       = "https://github.com/your-fork/repo.git"
+# repo_branch    = "main"

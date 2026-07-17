@@ -1,8 +1,6 @@
 # Disaggregated Voice Pipeline
 
-**Demo #2 for RHAISTRAT-1928** — vLLM-Omni Tech Preview
-
-A voice assistant that chains three independent AI services — Speech-to-Text, Language Model, and Text-to-Speech — via LiveKit agents. Unlike monolithic voice models, each pipeline stage can be swapped independently to meet data sovereignty requirements.
+A voice assistant that chains three independent AI services — Speech-to-Text, Language Model, and Text-to-Speech — via LiveKit agents. Each pipeline stage can be swapped independently at runtime to meet data sovereignty requirements.
 
 ```
 ┌──────────┐     ┌──────────┐     ┌─────────────────────────────────────┐
@@ -20,169 +18,169 @@ A voice assistant that chains three independent AI services — Speech-to-Text, 
 
 ## Model Menu (Sovereignty Provenance)
 
-| Stage | Model | Origin | GPU Memory | Notes |
-|-------|-------|--------|------------|-------|
-| **STT** | Systran/faster-whisper-large-v3 | France | CPU only | Default |
-| **STT** | Systran/faster-whisper-medium | France | CPU only | Lighter |
-| **LLM** | google/gemma-3-4b-it | US | ~8 GB | Default |
-| **LLM** | google/gemma-3-12b-it | US | ~24 GB | H100 |
-| **LLM** | mistralai/Mistral-Small-3.1-24B-Instruct-2503 | EU | ~48 GB | H100 |
-| **TTS** | Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice | China | ~24-30 GB | Default, 2-stage |
-| **TTS** | mistralai/Voxtral-4B-TTS-2603 | EU | ~8-16 GB | Single-stage |
+All models can be swapped at runtime via the frontend dropdown — no restarts needed.
 
-## Prerequisites
+| Stage | Model | Origin | Notes |
+|-------|-------|--------|-------|
+| **STT** | Systran/faster-whisper-large-v3 | France | Default, CPU |
+| **STT** | Systran/faster-whisper-medium | France | Lighter, CPU |
+| **STT** | Qwen/Qwen3-ASR-0.6B | China | CPU |
+| **LLM** | google/gemma-3-4b-it | US | Default |
+| **LLM** | Qwen/Qwen3-0.6B | China | |
+| **LLM** | mistralai/Mistral-7B-Instruct-v0.3 | EU | |
+| **TTS** | Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice | China | Default |
+| **TTS** | mistralai/Voxtral-4B-TTS-2603 | EU | |
 
-- **GPU server**: NVIDIA H100 (80 GB) recommended, or A10G/L4 (24 GB) with smaller models
-- **Python**: 3.10+
-- **Node.js**: 18+ with pnpm
-- **Docker**: for faster-whisper-server
-- **vLLM** and **vLLM-Omni**: installed on GPU server
-- **LiveKit server**: [livekit-server](https://docs.livekit.io/home/self-hosting/local/)
+## Deploy
 
-## Quick Start
+### Option A: Terraform (AWS) — Fully Automated
 
-### 1. Configure environment
+Provisions a GPU EC2 instance with everything pre-configured. Requires an AWS account and [Terraform](https://developer.hashicorp.com/terraform/install).
+
+```bash
+cd infra
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars: set key_pair_name, my_ip, hf_token
+terraform init
+terraform apply
+```
+
+The instance boots in ~15 minutes (model downloads + GPU warm-up). Terraform outputs the frontend URL and SSH command.
+
+To deploy from a fork, set `repo_url` and `repo_branch` in your tfvars.
+
+### Option B: Docker Compose (Any GPU Server)
+
+Requires: Docker with NVIDIA Container Toolkit, an NVIDIA GPU (24+ GB VRAM).
+
+```bash
+# 1. Configure
+cp .env.example .env
+# Edit .env: set HF_TOKEN (required), adjust GPU_UTIL if needed
+
+# 2. Pre-download models (optional but recommended — avoids long first-start)
+pip install huggingface-hub
+for model in google/gemma-3-4b-it Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice; do
+  huggingface-cli download "$model" --token "$(grep HF_TOKEN .env | cut -d= -f2)"
+done
+
+# 3. Start services (GPU services take 2-5 min to load models)
+docker compose up -d livekit stt-whisper
+docker compose up -d tts        # wait for model load
+docker compose up -d llm        # wait for model load
+docker compose up -d --build agent frontend
+
+# 4. Start model manager (runs on host, manages container lifecycle)
+python3 scripts/model-manager.py &
+```
+
+Open `http://localhost:3000`, click **Start Conversation**, and speak.
+
+<details>
+<summary>Option C: Manual Scripts (Development)</summary>
+
+For local development without Docker Compose. Requires Python 3.10+, Node 18+ with pnpm, and individual services installed.
 
 ```bash
 cp .env.example .env.local
-# Edit .env.local with your model choices and service URLs
 cp .env.local agent/.env.local
 cp .env.local frontend/.env.local
-```
 
-If accessing from a remote browser (not localhost), set the LiveKit URL to the server's hostname in `frontend/.env.local`:
-
-```bash
-LIVEKIT_URL=ws://<server-hostname>:7880
-```
-
-### 2. Start infrastructure
-
-```bash
-# Terminal 1: LiveKit server
+# Terminal 1: LiveKit
 ./scripts/start-livekit.sh
 
-# Terminal 2: STT (CPU, any machine)
+# Terminal 2: STT (CPU)
 ./scripts/start-stt.sh
 
-# Terminal 3: LLM (specify GPU with LLM_GPU=N)
+# Terminal 3: LLM (GPU)
 ./scripts/start-vllm-llm.sh
 
-# Terminal 4: TTS (single-process mode)
+# Terminal 4: TTS (GPU)
 ./scripts/start-vllm-tts.sh single
 
-# Or for Qwen3-TTS 2-stage on separate GPUs:
-# Terminal 4a: TTS_GPU=1 ./scripts/start-vllm-tts.sh stage0
-# Terminal 4b: TTS_GPU_STAGE1=2 ./scripts/start-vllm-tts.sh stage1
+# Terminal 5: Agent
+cd agent && pip install -e . && python src/agent.py dev
+
+# Terminal 6: Frontend
+cd frontend && pnpm install && pnpm dev --hostname 0.0.0.0
 ```
 
-### 3. Start the agent
+</details>
+
+## Runtime Model Switching
+
+The **model manager** (`scripts/model-manager.py`) is a host-level HTTP API on port 8006 that swaps models without restarting the whole stack:
+
+- **LLM/TTS**: Updates `.env` and runs `docker compose up -d --no-deps <service>` to restart the container with the new model
+- **STT**: Stops the current STT container and starts the one for the selected engine (different Docker images per STT engine)
+
+The frontend dropdown triggers these switches automatically. You can also call the API directly:
 
 ```bash
-cd agent
-pip install -e .
-python src/agent.py dev
+# Switch LLM to Mistral (EU)
+curl -X POST http://localhost:8006/switch-llm \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "mistralai/Mistral-7B-Instruct-v0.3"}'
+
+# Check status
+curl http://localhost:8006/llm-status
 ```
 
-### 4. Start the frontend
-
-```bash
-cd frontend
-pnpm install
-pnpm dev --hostname 0.0.0.0
-```
-
-For remote access, suppress Next.js cross-origin dev errors by setting `ALLOWED_DEV_ORIGIN`:
-
-```bash
-ALLOWED_DEV_ORIGIN=<server-hostname> pnpm dev --hostname 0.0.0.0
-```
-
-### 5. Open browser
-
-Navigate to `http://localhost:3000` (or `http://<server-hostname>:3000` for remote access), click **Start Conversation**, and speak.
-
-The timing overlay below the visualizer shows per-stage latency: **STT → LLM → TTS → Total**.
+Switches take 30-120 seconds (model loading). Pre-cached models load from disk.
 
 ## Remote Access (non-localhost)
 
-WebRTC microphone capture requires HTTPS or localhost. When accessing the demo from a remote browser over HTTP:
-
-1. **Do not use SSH tunnels** — WebRTC audio uses UDP, which SSH cannot forward. Connect directly to the server hostname.
-
-2. **Launch Chrome with the insecure-origin flag** to enable microphone access over HTTP:
+WebRTC microphone capture requires HTTPS or localhost. When accessing from a remote browser over HTTP, launch Chrome with the insecure-origin flag:
 
 ```bash
 # macOS
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-  --unsafely-treat-insecure-origin-as-secure="http://<server-hostname>:3000" \
+  --unsafely-treat-insecure-origin-as-secure="http://<server-ip>:3000" \
   --user-data-dir=/tmp/chrome-voice-demo \
-  "http://<server-hostname>:3000"
-
-# Linux
-google-chrome \
-  --unsafely-treat-insecure-origin-as-secure="http://<server-hostname>:3000" \
-  --user-data-dir=/tmp/chrome-voice-demo \
-  "http://<server-hostname>:3000"
+  "http://<server-ip>:3000"
 ```
 
-3. Ensure `frontend/.env.local` has `LIVEKIT_URL=ws://<server-hostname>:7880` (not `localhost`).
+Do not use SSH tunnels — WebRTC audio uses UDP, which SSH cannot forward.
 
-## Model Swap (Sovereignty Demo)
-
-To swap a model, change the environment variable and restart the agent:
+## Testing
 
 ```bash
-# Example: switch LLM from Gemma (US) to Mistral (EU)
-# Edit agent/.env.local:
-#   LLM_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
-#   LLM_BASE_URL=http://<gpu-server>:8002/v1
-
-# Restart agent
-cd agent && python src/agent.py dev
+make test-unit          # Agent + frontend unit tests
+make smoke              # Health checks (requires running services)
+make test-integration   # Full integration tests
 ```
 
-The frontend timing overlay updates per-turn, confirming which services are active.
+## Project Structure
 
-## Hardware Configurations
-
-### H100 (80 GB) — Full Demo
-
-| GPU | Service | Model |
-|-----|---------|-------|
-| 0 | vLLM LLM | gemma-3-4b-it (~8 GB) |
-| 1 | vLLM-Omni TTS Stage 0 | Qwen3-TTS Talker (~15 GB) |
-| 2 | vLLM-Omni TTS Stage 1 | Qwen3-TTS Codec (~15 GB) |
-| CPU | faster-whisper-server | faster-whisper-large-v3 |
-
-### A10G / L4 (24 GB) — Compact Demo
-
-| GPU | Service | Model |
-|-----|---------|-------|
-| 0 | vLLM LLM + vLLM-Omni TTS | gemma-3-4b-it + Voxtral-4B (~16-20 GB) |
-| CPU | faster-whisper-server | faster-whisper-medium |
+```
+docker-compose.yml              # Service topology (8 containers)
+.env.example                    # Configuration template
+livekit-config/livekit.yaml     # LiveKit server config
+scripts/model-manager.py        # Runtime model switching API (port 8006)
+agent/
+  src/agent.py                  # LiveKit voice agent (STT -> LLM -> TTS)
+  tests/test_agent.py           # Unit tests
+frontend/                       # React/Next.js UI with model selector
+infra/
+  main.tf                       # AWS infrastructure (VPC, EC2, EIP)
+  variables.tf                  # Terraform variables
+  user_data.sh                  # EC2 bootstrap script
+  terraform.tfvars.example      # Variable template
+openshift/                      # OpenShift/Kubernetes manifests
+Makefile                        # Test targets
+```
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Stuck on "Listening" | Cloud turn detection auth fails on self-hosted LiveKit | Already fixed — agent uses `turn_detection=None` |
-| TTS error: `response_format='mp3'` rejected | vLLM-Omni streaming requires PCM or WAV | Already fixed — agent uses `response_format="pcm"` |
-| No audio from microphone | Browser blocks mic over HTTP (non-localhost) | Launch Chrome with `--unsafely-treat-insecure-origin-as-secure` flag |
-| Audio frames are silence (rms=0) | Using SSH tunnel — WebRTC UDP can't traverse it | Connect directly to server hostname, not via SSH tunnel |
-| Cross-origin errors in Next.js logs | HMR websocket blocked on non-localhost | Set `ALLOWED_DEV_ORIGIN=<hostname>` when starting frontend |
-| `FileNotFoundError: 'ninja'` | FlashInfer JIT compilation needs ninja | `pip install ninja` |
-| STT model unloaded | faster-whisper-server drops model after 300s idle | `curl -X POST http://localhost:8001/v1/models/<model-name>` |
-
-## Project Structure
-
-```
-agent/src/agent.py          # Disaggregated pipeline (STT → LLM → TTS)
-frontend/                   # React/Next.js + LiveKit UI with timing overlay
-scripts/                    # Service launch scripts
-docs/deployment.md          # Detailed deployment guide
-```
+| No audio from microphone | Browser blocks mic over HTTP | Launch Chrome with `--unsafely-treat-insecure-origin-as-secure` flag |
+| Model switch times out | GPU memory insufficient for the new model | Reduce `LLM_GPU_UTIL` / `TTS_GPU_UTIL` in `.env` |
+| TTS produces gibberish | vLLM-Omni v0.24.0 Voxtral bug | Apply hot-patch (done automatically in Terraform deploy) |
+| `HF_TOKEN` errors on startup | Gated models require a HuggingFace token | Set `HF_TOKEN` in `.env` with a token from huggingface.co/settings/tokens |
+| Frontend model dropdown empty | Model manager not running | Start with `python3 scripts/model-manager.py` |
 
 ## Upstream
 
-Forked from [oglok/voice-assistant-with-vllm-omni](https://github.com/oglok/voice-assistant-with-vllm-omni) by Ricardo Noriega.
+Forked from [redhat-et/chained-voice-assistant-with-vllm-omni](https://github.com/redhat-et/chained-voice-assistant-with-vllm-omni).
