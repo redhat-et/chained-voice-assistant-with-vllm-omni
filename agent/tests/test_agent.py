@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 import types
@@ -32,7 +33,7 @@ dotenv.load_dotenv = mock.MagicMock()
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from agent import resolve_models, build_instructions
+from agent import resolve_models, build_instructions, strip_thinking_tags
 
 DEFAULTS = {
     "stt": "Systran/faster-whisper-large-v3",
@@ -92,3 +93,53 @@ class TestBuildInstructions:
     def test_qwen_case_insensitive(self):
         result = build_instructions("QWEN/some-model")
         assert "/no_think" in result
+
+
+async def _async_chunks(*chunks):
+    for c in chunks:
+        yield c
+
+
+async def _collect(async_gen):
+    return [chunk async for chunk in async_gen]
+
+
+class TestStripThinkingTags:
+    def test_accepts_async_iterable(self):
+        result = asyncio.run(_collect(strip_thinking_tags(_async_chunks("hello", " world"))))
+        assert result == ["hello", " world"]
+
+    def test_strips_think_open_tag(self):
+        result = asyncio.run(_collect(strip_thinking_tags(_async_chunks("<think>", "hello"))))
+        assert "hello" in result
+        assert "<think>" not in "".join(result)
+
+    def test_strips_think_close_tag(self):
+        result = asyncio.run(_collect(strip_thinking_tags(_async_chunks("</think>", "hello"))))
+        assert "hello" in result
+        assert "</think>" not in "".join(result)
+
+    def test_strips_qwen3_thinking_pattern(self):
+        result = asyncio.run(_collect(strip_thinking_tags(
+            _async_chunks("<think>", "\n\n", "</think>", "\n\n", "Hello!")
+        )))
+        joined = "".join(result)
+        assert "<think>" not in joined
+        assert "</think>" not in joined
+        assert "Hello!" in joined
+
+    def test_drops_empty_chunks_after_stripping(self):
+        result = asyncio.run(_collect(strip_thinking_tags(_async_chunks("<think>", "</think>"))))
+        assert all(chunk != "" for chunk in result)
+
+    def test_passthrough_clean_text(self):
+        result = asyncio.run(_collect(strip_thinking_tags(
+            _async_chunks("I'm", " a", " voice", " assistant.")
+        )))
+        assert "".join(result) == "I'm a voice assistant."
+
+    def test_signature_is_stream_to_stream(self):
+        """Guard against regressing to str->str signature (kills TTS silently)."""
+        import inspect
+        assert inspect.isasyncgenfunction(strip_thinking_tags), \
+            "strip_thinking_tags must be an async generator (stream->stream), not str->str"
