@@ -71,6 +71,13 @@ def resolve_models(raw_meta, defaults):
     return {"stt": stt, "llm": llm, "tts": tts, "voice": voice}, sources
 
 
+async def strip_thinking_tags(stream):
+    async for chunk in stream:
+        cleaned = chunk.replace("<think>", "").replace("</think>", "")
+        if cleaned:
+            yield cleaned
+
+
 def build_instructions(llm_model):
     instructions = "You are a helpful voice assistant. Respond naturally and concisely."
     if "qwen" in llm_model.lower():
@@ -119,6 +126,7 @@ async def entrypoint(ctx: JobContext):
         ),
         vad=silero.VAD.load(),
         turn_detection=None,
+        tts_text_transforms=["filter_markdown", "filter_emoji", strip_thinking_tags],
     )
 
     turn_metrics = defaultdict(dict)

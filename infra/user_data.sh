@@ -162,6 +162,16 @@ services:
       - "8001:8000"
     restart: unless-stopped
 
+  stt-whisper-medium:
+    image: fedirz/faster-whisper-server:0.5-cpu
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-medium
+    ports:
+      - "8001:8000"
+    profiles:
+      - stt-whisper-medium
+    restart: unless-stopped
+
   stt-qwen:
     image: lancelrq/qwen3-asr-service:latest-cpu
     command: --device cpu --model-size 0.6b --port 8000 --enable-openai-api
@@ -230,7 +240,6 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - livekit
-      - stt-whisper
       - llm
       - tts
     extra_hosts:
@@ -292,6 +301,7 @@ COMPOSE_DIR = "/opt/voice-pipeline"
 
 AVAILABLE_STT = [
     "Systran/faster-whisper-large-v3",
+    "Systran/faster-whisper-medium",
     "Qwen/Qwen3-ASR-0.6B",
 ]
 AVAILABLE_LLM = [
@@ -306,6 +316,7 @@ AVAILABLE_TTS = [
 
 STT_CONTAINERS = {
     "Systran/faster-whisper-large-v3": "stt-whisper",
+    "Systran/faster-whisper-medium": "stt-whisper-medium",
     "Qwen/Qwen3-ASR-0.6B": "stt-qwen",
 }
 
@@ -345,6 +356,7 @@ def get_active(kind):
 
 STT_HEALTH_PATHS = {
     "Systran/faster-whisper-large-v3": "/v1/models",
+    "Systran/faster-whisper-medium": "/v1/models",
     "Qwen/Qwen3-ASR-0.6B": "/compat/openai/v1/models",
 }
 
@@ -556,6 +568,41 @@ for i in $(seq 1 180); do
   fi
   sleep 10
 done
+
+# -----------------------------------------------------------------------
+# 11. Hot-patch Voxtral TTS feedback bug (vllm-omni PR #4954)
+#     Fixed in v0.24.1 but no Docker image published yet.
+#     Remove this block once vllm/vllm-omni image >= v0.24.1 is used.
+# -----------------------------------------------------------------------
+echo ">>> Patching Voxtral TTS feedback bug (PR #4954)..."
+VOXTRAL_PY="/usr/local/lib/python3.12/dist-packages/vllm_omni/model_executor/models/voxtral_tts/voxtral_tts.py"
+docker cp voice-pipeline-tts-1:$VOXTRAL_PY /tmp/voxtral_tts.py 2>/dev/null && \
+python3 << 'PATCHEOF'
+with open("/tmp/voxtral_tts.py") as f:
+    content = f.read()
+old = '        audio_tokens = info_dict.pop("audio", None)'
+new = """        codes = info_dict.get("codes")
+        audio_tokens = codes.get("audio") if isinstance(codes, Mapping) else None
+        if audio_tokens is None:
+            audio_tokens = info_dict.pop("audio", None)"""
+if old in content:
+    content = content.replace(old, new, 1)
+    with open("/tmp/voxtral_tts.py", "w") as f:
+        f.write(content)
+    print("Voxtral TTS patched")
+else:
+    print("Patch target not found (may already be fixed)")
+PATCHEOF
+docker cp /tmp/voxtral_tts.py voice-pipeline-tts-1:$VOXTRAL_PY 2>/dev/null && \
+docker compose restart tts && \
+echo ">>> Waiting for TTS to reload after patch..." && \
+for i in $(seq 1 60); do
+  if curl -s http://localhost:8003/v1/models 2>/dev/null | grep -qi "qwen\|voxtral"; then
+    echo ">>> TTS ready after patch (~$((i * 5))s)"
+    break
+  fi
+  sleep 5
+done || echo "WARNING: Voxtral patch skipped (container not running or file not found)"
 
 echo ">>> Building and starting agent + frontend..."
 docker compose up -d --build agent frontend

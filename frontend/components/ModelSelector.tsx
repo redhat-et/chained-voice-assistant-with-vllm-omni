@@ -23,7 +23,7 @@ export interface AvailableModels {
 
 const MODEL_CATALOG: Record<string, Omit<ModelOption, "id">> = {
   "Systran/faster-whisper-large-v3": { name: "Whisper Large v3", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
-  "Systran/faster-whisper-base": { name: "Whisper Base", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
+  "Systran/faster-whisper-medium": { name: "Whisper Medium", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
   "google/gemma-3-4b-it": { name: "Gemma 3 4B", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
   "RedHatAI/gemma-3-4b-it-quantized.w4a16": { name: "Gemma 3 4B (INT4)", provenance: "US", flag: "\u{1F1FA}\u{1F1F8}" },
   "Qwen/Qwen3-0.6B": { name: "Qwen3 0.6B", provenance: "China", flag: "\u{1F1E8}\u{1F1F3}" },
