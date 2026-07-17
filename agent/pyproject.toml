@@ -14,5 +14,8 @@ dependencies = [
     "pyyaml",
 ]
 
+[project.optional-dependencies]
+test = ["pytest"]
+
 [tool.setuptools.packages.find]
 where = ["src"]

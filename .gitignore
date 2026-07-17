@@ -28,6 +28,11 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+
 # Spec Kit
 .specify/
 specs/
