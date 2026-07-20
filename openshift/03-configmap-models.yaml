@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-config
+  namespace: voice-pipeline
+data:
+  STT_ACTIVE_MODEL: Systran/faster-whisper-large-v3
+  LLM_ACTIVE_MODEL: google/gemma-3-4b-it
+  TTS_ACTIVE_MODEL: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+  TTS_VOICE: vivian
+  LLM_GPU_UTIL: "0.4"
+  TTS_GPU_UTIL: "0.4"

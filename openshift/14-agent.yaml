@@ -15,12 +15,14 @@ spec:
       labels:
         app.kubernetes.io/name: agent
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: dell-l40s-1.bmas-001.lab.rdu2.dc.redhat.com
       containers:
         - name: agent
           image: quay.io/redhat-et/voice-pipeline-agent:latest
           env:
             - name: LIVEKIT_URL
-              value: ws://livekit-server:7880
+              value: ws://livekit-server:7890
             - name: LIVEKIT_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -34,17 +36,29 @@ spec:
             - name: STT_BASE_URL
               value: http://stt-server:8001/v1
             - name: STT_MODEL
-              value: Systran/faster-whisper-large-v3
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: STT_ACTIVE_MODEL
             - name: LLM_BASE_URL
               value: http://llm-server:8002/v1
             - name: LLM_MODEL
-              value: google/gemma-3-4b-it
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: LLM_ACTIVE_MODEL
             - name: TTS_BASE_URL
               value: http://tts-server:8003/v1
             - name: TTS_MODEL
-              value: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: TTS_ACTIVE_MODEL
             - name: TTS_VOICE
-              value: vivian
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: TTS_VOICE
           resources:
             requests:
               cpu: 250m

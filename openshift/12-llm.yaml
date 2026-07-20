@@ -17,17 +17,34 @@ spec:
       labels:
         app.kubernetes.io/name: llm
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: dell-l40s-1.bmas-001.lab.rdu2.dc.redhat.com
       containers:
         - name: vllm
           image: vllm/vllm-openai:latest
           command: ["vllm", "serve"]
           args:
-            - google/gemma-3-4b-it
+            - "$(LLM_ACTIVE_MODEL)"
             - --host
             - "0.0.0.0"
             - --port
             - "8002"
+            - --gpu-memory-utilization
+            - "$(LLM_GPU_UTIL)"
+            - --max-model-len
+            - "2048"
+            - --enforce-eager
           env:
+            - name: LLM_ACTIVE_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: LLM_ACTIVE_MODEL
+            - name: LLM_GPU_UTIL
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: LLM_GPU_UTIL
             - name: HOME
               value: /tmp
             - name: HF_TOKEN

@@ -15,6 +15,8 @@ spec:
       labels:
         app.kubernetes.io/name: livekit
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: dell-l40s-1.bmas-001.lab.rdu2.dc.redhat.com
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       containers:
@@ -22,9 +24,9 @@ spec:
           image: livekit/livekit-server:latest
           args: ["--config", "/etc/livekit/config.yaml"]
           ports:
-            - containerPort: 7880
+            - containerPort: 7890
               name: http
-            - containerPort: 7881
+            - containerPort: 7891
               name: rtc
           resources:
             requests:
@@ -52,11 +54,11 @@ spec:
     app.kubernetes.io/name: livekit
   ports:
     - name: http
-      port: 7880
-      targetPort: 7880
+      port: 7890
+      targetPort: 7890
     - name: rtc
-      port: 7881
-      targetPort: 7881
+      port: 7891
+      targetPort: 7891
 ---
 apiVersion: route.openshift.io/v1
 kind: Route
@@ -66,7 +68,7 @@ metadata:
   annotations:
     haproxy.router.openshift.io/timeout: "3600s"
 spec:
-  # host: livekit-<namespace>.apps.<cluster-domain>
+  host: livekit-voice-pipeline.apps.alpha.modelarch.org
   to:
     kind: Service
     name: livekit-server
