@@ -108,14 +108,24 @@ def patch_stt_deployment(model):
 
 
 def wait_for_ready(deployment_name, timeout=300):
+    dep = apps_v1.read_namespaced_deployment(deployment_name, NAMESPACE)
+    target_generation = dep.metadata.generation
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         dep = apps_v1.read_namespaced_deployment(deployment_name, NAMESPACE)
+        observed = dep.status.observed_generation or 0
         ready = dep.status.ready_replicas or 0
         updated = dep.status.updated_replicas or 0
         desired = dep.spec.replicas or 1
-        if ready >= desired and updated >= desired:
+        unavailable = dep.status.unavailable_replicas or 0
+
+        if (observed >= target_generation and
+                ready >= desired and updated >= desired and
+                unavailable == 0):
             return True
+        print(f"  [{deployment_name}] gen={observed}/{target_generation} "
+              f"ready={ready}/{desired} updated={updated} unavail={unavailable}")
         time.sleep(5)
     return False
 

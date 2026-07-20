@@ -99,50 +99,28 @@ export default function VoiceAssistant() {
     if (!modelSelection) return;
     setConnecting(true);
     try {
-      if (modelSelection.stt_model !== activeStt) {
-        const shortName = modelSelection.stt_model.split("/").pop() ?? modelSelection.stt_model;
-        setStatusMsg(`Loading STT ${shortName}...`);
-        const switchRes = await fetch("/api/switch-stt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: modelSelection.stt_model }),
-        });
-        if (!switchRes.ok) {
-          const err = await switchRes.json();
-          throw new Error(err.error || "Failed to switch STT model");
-        }
-        setActiveStt(modelSelection.stt_model);
-      }
+      const switches: { label: string; endpoint: string; model: string }[] = [
+        { label: "STT", endpoint: "/api/switch-stt", model: modelSelection.stt_model },
+        { label: "LLM", endpoint: "/api/switch-llm", model: modelSelection.llm_model },
+        { label: "TTS", endpoint: "/api/switch-tts", model: modelSelection.tts_model },
+      ];
 
-      if (modelSelection.tts_model !== activeTts) {
-        const shortName = modelSelection.tts_model.split("/").pop() ?? modelSelection.tts_model;
-        setStatusMsg(`Loading TTS ${shortName}...`);
-        const switchRes = await fetch("/api/switch-tts", {
+      for (const sw of switches) {
+        const shortName = sw.model.split("/").pop() ?? sw.model;
+        setStatusMsg(`Ensuring ${sw.label} ${shortName}...`);
+        const switchRes = await fetch(sw.endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: modelSelection.tts_model }),
+          body: JSON.stringify({ model: sw.model }),
         });
         if (!switchRes.ok) {
           const err = await switchRes.json();
-          throw new Error(err.error || "Failed to switch TTS model");
+          throw new Error(err.error || `Failed to switch ${sw.label} model`);
         }
-        setActiveTts(modelSelection.tts_model);
       }
-
-      if (modelSelection.llm_model !== activeLlm) {
-        const shortName = modelSelection.llm_model.split("/").pop() ?? modelSelection.llm_model;
-        setStatusMsg(`Loading LLM ${shortName}...`);
-        const switchRes = await fetch("/api/switch-llm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: modelSelection.llm_model }),
-        });
-        if (!switchRes.ok) {
-          const err = await switchRes.json();
-          throw new Error(err.error || "Failed to switch LLM model");
-        }
-        setActiveLlm(modelSelection.llm_model);
-      }
+      setActiveStt(modelSelection.stt_model);
+      setActiveLlm(modelSelection.llm_model);
+      setActiveTts(modelSelection.tts_model);
 
       setStatusMsg("Connecting...");
       const response = await fetch("/api/token", {
@@ -159,7 +137,7 @@ export default function VoiceAssistant() {
       setConnecting(false);
       setStatusMsg("");
     }
-  }, [modelSelection, activeStt, activeLlm, activeTts]);
+  }, [modelSelection]);
 
   const handleDisconnected = useCallback(() => {
     setConnectionDetails(null);
