@@ -72,9 +72,6 @@ export default function VoiceAssistant() {
   const [connecting, setConnecting] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
   const [available, setAvailable] = useState<AvailableModels | null>(null);
-  const [activeStt, setActiveStt] = useState("");
-  const [activeLlm, setActiveLlm] = useState("");
-  const [activeTts, setActiveTts] = useState("");
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
 
   useEffect(() => {
@@ -85,9 +82,6 @@ export default function VoiceAssistant() {
         const sttActive = data.stt_active ?? data.stt[0] ?? "";
         const llmActive = data.llm_active ?? data.llm[0] ?? "";
         const ttsActive = data.tts_active ?? data.tts[0] ?? "";
-        setActiveStt(sttActive);
-        setActiveLlm(llmActive);
-        setActiveTts(ttsActive);
         setModelSelection(defaultSelectionFromAvailable(data, llmActive, ttsActive, sttActive));
       })
       .catch(() => {
@@ -99,28 +93,59 @@ export default function VoiceAssistant() {
     if (!modelSelection) return;
     setConnecting(true);
     try {
-      const switches: { label: string; endpoint: string; model: string }[] = [
-        { label: "STT", endpoint: "/api/switch-stt", model: modelSelection.stt_model },
-        { label: "LLM", endpoint: "/api/switch-llm", model: modelSelection.llm_model },
-        { label: "TTS", endpoint: "/api/switch-tts", model: modelSelection.tts_model },
-      ];
-
-      for (const sw of switches) {
-        const shortName = sw.model.split("/").pop() ?? sw.model;
-        setStatusMsg(`Ensuring ${sw.label} ${shortName}...`);
-        const switchRes = await fetch(sw.endpoint, {
+      setStatusMsg("Requesting model switches...");
+      const switchResults = await Promise.all([
+        fetch("/api/switch-stt", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: sw.model }),
-        });
-        if (!switchRes.ok) {
-          const err = await switchRes.json();
-          throw new Error(err.error || `Failed to switch ${sw.label} model`);
+          body: JSON.stringify({ model: modelSelection.stt_model }),
+        }),
+        fetch("/api/switch-llm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelSelection.llm_model }),
+        }),
+        fetch("/api/switch-tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelSelection.tts_model }),
+        }),
+      ]);
+
+      for (const res of switchResults) {
+        if (!res.ok && res.status !== 202) {
+          const err = await res.json();
+          throw new Error(err.error || "Failed to switch model");
         }
       }
-      setActiveStt(modelSelection.stt_model);
-      setActiveLlm(modelSelection.llm_model);
-      setActiveTts(modelSelection.tts_model);
+
+      const allReady = switchResults.every((r) => r.status === 200);
+      if (!allReady) {
+        setStatusMsg("Loading models...");
+        const deadline = Date.now() + 300_000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const statusRes = await fetch("/api/switch-status");
+          if (!statusRes.ok) continue;
+          const status = await statusRes.json();
+
+          for (const kind of ["stt", "llm", "tts"] as const) {
+            if (status[kind]?.error) {
+              throw new Error(
+                `${kind.toUpperCase()} switch failed: ${status[kind].error}`,
+              );
+            }
+          }
+
+          const loading: string[] = [];
+          if (!status.stt?.ready) loading.push("STT");
+          if (!status.llm?.ready) loading.push("LLM");
+          if (!status.tts?.ready) loading.push("TTS");
+
+          if (loading.length === 0) break;
+          setStatusMsg(`Loading ${loading.join(", ")}...`);
+        }
+      }
 
       setStatusMsg("Connecting...");
       const response = await fetch("/api/token", {
