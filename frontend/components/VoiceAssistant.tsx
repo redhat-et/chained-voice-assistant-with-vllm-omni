@@ -119,6 +119,7 @@ export default function VoiceAssistant() {
         }
       }
 
+      const hadRealSwitch = switchResults.some((r) => r.status === 202);
       const allReady = switchResults.every((r) => r.status === 200);
       if (!allReady) {
         setStatusMsg("Loading models...");
@@ -147,6 +148,12 @@ export default function VoiceAssistant() {
         }
       }
 
+      if (hadRealSwitch) {
+        sessionStorage.setItem("autoconnect", "true");
+        window.location.reload();
+        return;
+      }
+
       setStatusMsg("Connecting...");
       const response = await fetch("/api/token", {
         method: "POST",
@@ -163,6 +170,13 @@ export default function VoiceAssistant() {
       setStatusMsg("");
     }
   }, [modelSelection]);
+
+  useEffect(() => {
+    if (modelSelection && sessionStorage.getItem("autoconnect")) {
+      sessionStorage.removeItem("autoconnect");
+      handleConnect();
+    }
+  }, [modelSelection, handleConnect]);
 
   const handleDisconnected = useCallback(() => {
     setConnectionDetails(null);
