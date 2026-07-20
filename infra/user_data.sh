@@ -16,6 +16,23 @@ REPO_BRANCH="${repo_branch}"
 WORKDIR="/opt/voice-pipeline"
 
 # -----------------------------------------------------------------------
+# 0. Wait for unattended-upgrades / dpkg lock (common on Ubuntu AMIs)
+# -----------------------------------------------------------------------
+wait_for_apt() {
+  local tries=0
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+        fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    if [ $tries -eq 0 ]; then
+      echo ">>> Waiting for dpkg/apt lock (unattended-upgrades)..."
+    fi
+    tries=$((tries + 1))
+    sleep 5
+  done
+}
+
+wait_for_apt
+
+# -----------------------------------------------------------------------
 # 1. Install Docker CE
 # -----------------------------------------------------------------------
 apt-get update -y
@@ -37,6 +54,8 @@ systemctl enable --now docker
 # -----------------------------------------------------------------------
 # 2. Install NVIDIA Container Toolkit
 # -----------------------------------------------------------------------
+wait_for_apt
+
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
   | gpg --batch --yes --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
