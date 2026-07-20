@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: voice-pipeline
+  labels:
+    app.kubernetes.io/name: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent
+    spec:
+      containers:
+        - name: agent
+          image: quay.io/redhat-et/voice-pipeline-agent:latest
+          env:
+            - name: LIVEKIT_URL
+              value: ws://livekit-server:7880
+            - name: LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: livekit-credentials
+                  key: LIVEKIT_API_KEY
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: livekit-credentials
+                  key: LIVEKIT_API_SECRET
+            - name: STT_BASE_URL
+              value: http://stt-server:8001/v1
+            - name: STT_MODEL
+              value: Systran/faster-whisper-large-v3
+            - name: LLM_BASE_URL
+              value: http://llm-server:8002/v1
+            - name: LLM_MODEL
+              value: google/gemma-3-4b-it
+            - name: TTS_BASE_URL
+              value: http://tts-server:8003/v1
+            - name: TTS_MODEL
+              value: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+            - name: TTS_VOICE
+              value: vivian
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi

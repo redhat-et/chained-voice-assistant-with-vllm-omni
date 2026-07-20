@@ -1,0 +1,132 @@
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    network_mode: host
+    volumes:
+      - ./livekit-config/livekit.yaml:/etc/livekit.yaml
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+
+  stt-whisper:
+    image: fedirz/faster-whisper-server:0.5-cpu
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-large-v3
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+
+  stt-whisper-medium:
+    image: fedirz/faster-whisper-server:0.5-cpu
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-medium
+    ports:
+      - "8001:8000"
+    profiles:
+      - stt-whisper-medium
+    restart: unless-stopped
+
+  stt-qwen:
+    image: lancelrq/qwen3-asr-service:latest-cpu
+    command: --device cpu --model-size 0.6b --port 8000 --enable-openai-api
+    ports:
+      - "8001:8000"
+    profiles:
+      - stt-qwen
+    restart: unless-stopped
+
+  tts:
+    image: quay.io/vllm/automation-vllm-omni:cuda-28466746130
+    runtime: nvidia
+    shm_size: "8g"
+    environment:
+      - "HF_TOKEN=${HF_TOKEN}"
+      - "HF_HUB_OFFLINE=0"
+    command: >-
+      vllm serve ${TTS_ACTIVE_MODEL}
+      --omni
+      --host 0.0.0.0
+      --port 8003
+      --gpu-memory-utilization ${TTS_GPU_UTIL:-0.4}
+    ports:
+      - "8003:8003"
+    volumes:
+      - ${HF_CACHE_DIR:-./hf-cache}:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  llm:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    shm_size: "8g"
+    environment:
+      - "HF_TOKEN=${HF_TOKEN}"
+      - HF_HUB_OFFLINE=1
+      - VLLM_USAGE_SOURCE=production
+    command: >-
+      ${LLM_ACTIVE_MODEL}
+      --host 0.0.0.0
+      --port 8002
+      --gpu-memory-utilization ${LLM_GPU_UTIL:-0.4}
+      --max-model-len 2048
+      --enforce-eager
+    ports:
+      - "8002:8002"
+    volumes:
+      - ${HF_CACHE_DIR:-./hf-cache}:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    depends_on:
+      - livekit
+      - llm
+      - tts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - LIVEKIT_URL=ws://${PRIVATE_IP:-localhost}:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secret}
+      - STT_BASE_URL=http://host.docker.internal:8001/v1
+      - STT_MODEL=${STT_ACTIVE_MODEL}
+      - LLM_BASE_URL=http://llm:8002/v1
+      - LLM_MODEL=${LLM_ACTIVE_MODEL}
+      - TTS_BASE_URL=http://tts:8003/v1
+      - TTS_MODEL=${TTS_ACTIVE_MODEL}
+      - TTS_VOICE=${TTS_VOICE:-vivian}
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - livekit
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - LIVEKIT_URL=ws://${PUBLIC_IP:-localhost}:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secret}
+      - STT_BASE_URL=http://stt:8000
+      - LLM_BASE_URL=http://llm:8002
+      - TTS_BASE_URL=http://tts:8003
+      - MODEL_MANAGER_URL=http://host.docker.internal:8006
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

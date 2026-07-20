@@ -1,4 +1,5 @@
 # Environment
+.env
 .env.local
 .env*.local
 
@@ -27,6 +28,12 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
 
 # Spec Kit
 .specify/
