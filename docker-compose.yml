@@ -35,11 +35,12 @@ services:
     restart: unless-stopped
 
   tts:
-    image: vllm/vllm-omni:v0.24.0
+    image: quay.io/vllm/automation-vllm-omni:cuda-28466746130
     runtime: nvidia
     shm_size: "8g"
     environment:
       - "HF_TOKEN=${HF_TOKEN}"
+      - "HF_HUB_OFFLINE=0"
     command: >-
       vllm serve ${TTS_ACTIVE_MODEL}
       --omni
