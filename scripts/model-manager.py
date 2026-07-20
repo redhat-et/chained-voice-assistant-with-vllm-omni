@@ -90,7 +90,7 @@ def wait_for_stt(model, port=8001, timeout=120):
         time.sleep(3)
     return False
 
-def wait_for_model(model, port, timeout=180):
+def wait_for_model(model, port, timeout=600):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
