@@ -21,6 +21,12 @@ from livekit.agents.voice.events import (
     ErrorEvent,
 )
 from livekit.plugins import openai, silero
+from livekit.plugins.openai import tts as _oai_tts
+
+_oai_tts.AUDIO_STREAM_MODELS.update({
+    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "mistralai/Voxtral-4B-TTS-2603",
+})
 
 load_dotenv(".env.local")
 logger = logging.getLogger("voice-assistant")
