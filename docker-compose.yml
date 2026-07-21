@@ -8,30 +8,54 @@ services:
     restart: unless-stopped
 
   stt-whisper:
-    image: fedirz/faster-whisper-server:0.5-cpu
+    image: fedirz/faster-whisper-server:0.5-cuda
+    runtime: nvidia
     environment:
       - WHISPER__MODEL=Systran/faster-whisper-large-v3
     ports:
       - "8001:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped
 
   stt-whisper-medium:
-    image: fedirz/faster-whisper-server:0.5-cpu
+    image: fedirz/faster-whisper-server:0.5-cuda
+    runtime: nvidia
     environment:
       - WHISPER__MODEL=Systran/faster-whisper-medium
     ports:
       - "8001:8000"
     profiles:
       - stt-whisper-medium
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped
 
   stt-qwen:
-    image: lancelrq/qwen3-asr-service:latest-cpu
-    command: --device cpu --model-size 0.6b --port 8000 --enable-openai-api
+    image: lancelrq/qwen3-asr-service:latest
+    runtime: nvidia
+    command: --device cuda --model-size 0.6b --port 8000 --enable-openai-api
     ports:
       - "8001:8000"
     profiles:
       - stt-qwen
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped
 
   tts:

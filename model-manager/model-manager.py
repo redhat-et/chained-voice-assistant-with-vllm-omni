@@ -35,9 +35,9 @@ AVAILABLE_TTS = [
 # --- STT model configs (different images/envs per engine) ---
 
 STT_IMAGE_MAP = {
-    "Systran/faster-whisper-large-v3": "fedirz/faster-whisper-server:0.5-cpu",
-    "Systran/faster-whisper-medium": "fedirz/faster-whisper-server:0.5-cpu",
-    "Qwen/Qwen3-ASR-0.6B": "lancelrq/qwen3-asr-service:latest-cpu",
+    "Systran/faster-whisper-large-v3": "fedirz/faster-whisper-server:0.5-cuda",
+    "Systran/faster-whisper-medium":   "fedirz/faster-whisper-server:0.5-cuda",
+    "Qwen/Qwen3-ASR-0.6B":            "lancelrq/qwen3-asr-service:latest",
 }
 
 STT_ENV_CONFIG = {
@@ -212,21 +212,23 @@ def restart_deployment(name):
 
 
 def patch_stt_deployment(model):
-    """STT uses different container images and env vars per model."""
+    """STT runs as sidecar in LLM pod — patch the stt container there."""
     image = STT_IMAGE_MAP[model]
     env_list = [client.V1EnvVar(**e) for e in STT_ENV_CONFIG[model]]
 
-    deployment = apps_v1.read_namespaced_deployment("stt", NAMESPACE)
-    container = deployment.spec.template.spec.containers[0]
-    container.image = image
-    container.env = env_list
+    deployment = apps_v1.read_namespaced_deployment("llm", NAMESPACE)
+    for container in deployment.spec.template.spec.containers:
+        if container.name == "stt":
+            container.image = image
+            container.env = env_list
+            break
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     if not deployment.spec.template.metadata.annotations:
         deployment.spec.template.metadata.annotations = {}
     deployment.spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"] = now
 
-    apps_v1.replace_namespaced_deployment("stt", NAMESPACE, deployment)
+    apps_v1.replace_namespaced_deployment("llm", NAMESPACE, deployment)
 
 
 def patch_gpu_deployment(kind, model):

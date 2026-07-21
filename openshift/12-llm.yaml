@@ -73,6 +73,33 @@ spec:
               mountPath: /dev/shm
             - name: chat-template
               mountPath: /etc/chat-template
+        - name: stt
+          image: fedirz/faster-whisper-server:0.5-cuda
+          env:
+            - name: WHISPER__MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: STT_ACTIVE_MODEL
+          ports:
+            - containerPort: 8000
+              name: stt-http
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 8Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: stt-http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
       securityContext:
         runAsUser: 0
       volumes:
