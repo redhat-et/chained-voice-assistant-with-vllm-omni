@@ -1,10 +1,14 @@
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import struct
 from collections import defaultdict
+from collections.abc import AsyncIterable, AsyncGenerator
 
 from dotenv import load_dotenv
+from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -12,7 +16,10 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     cli,
+    tokenize,
+    tts,
 )
+from livekit.agents.voice import ModelSettings
 from livekit.agents.voice.events import (
     UserStateChangedEvent,
     AgentStateChangedEvent,
@@ -85,9 +92,78 @@ def build_instructions(llm_model):
     return instructions
 
 
+TARGET_RMS = 3000
+MIN_RMS = 50
+MAX_GAIN = 3.0
+TTS_MIN_TOKEN_LEN = int(os.getenv("TTS_MIN_TOKEN_LEN", "150"))
+
+
+def normalize_audio_frame(frame: rtc.AudioFrame, target_rms: float = TARGET_RMS) -> rtc.AudioFrame:
+    data = bytes(frame.data)
+    n_samples = len(data) // 2
+    if n_samples == 0:
+        return frame
+
+    samples = struct.unpack(f"<{n_samples}h", data)
+    sum_sq = sum(s * s for s in samples)
+    rms = (sum_sq / n_samples) ** 0.5
+
+    if rms < MIN_RMS:
+        return frame
+
+    gain = min(target_rms / rms, MAX_GAIN)
+    if 0.95 <= gain <= 1.05:
+        return frame
+
+    normalized = struct.pack(
+        f"<{n_samples}h",
+        *(max(-32768, min(32767, int(s * gain))) for s in samples),
+    )
+    return rtc.AudioFrame(
+        data=normalized,
+        sample_rate=frame.sample_rate,
+        num_channels=frame.num_channels,
+        samples_per_channel=frame.samples_per_channel,
+    )
+
+
 class VoiceAssistant(Agent):
     def __init__(self, instructions: str = "You are a helpful voice assistant. Respond naturally and concisely.") -> None:
         super().__init__(instructions=instructions)
+
+    async def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncGenerator[rtc.AudioFrame, None]:
+        activity = self._get_activity_or_raise()
+        if activity.tts is None:
+            raise RuntimeError("`tts_node` called but no TTS is available.")
+
+        wrapped_tts = activity.tts
+        if not activity.tts.capabilities.streaming:
+            wrapped_tts = tts.StreamAdapter(
+                tts=wrapped_tts,
+                sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
+                    min_token_len=TTS_MIN_TOKEN_LEN,
+                    retain_format=True,
+                ),
+            )
+
+        conn_options = activity.session.conn_options.tts_conn_options
+        async with wrapped_tts.stream(conn_options=conn_options) as stream:
+
+            async def _forward_input() -> None:
+                async for chunk in text:
+                    stream.push_text(chunk)
+                stream.end_input()
+
+            forward_task = asyncio.create_task(_forward_input())
+            try:
+                async for ev in stream:
+                    yield normalize_audio_frame(ev.frame)
+            finally:
+                forward_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await forward_task
 
 
 @server.rtc_session(agent_name="voice-assistant")
@@ -130,6 +206,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     turn_metrics = defaultdict(dict)
+    last_stt_ms = 0.0
 
     @session.on("user_state_changed")
     def on_user_state(ev: UserStateChangedEvent):
@@ -150,17 +227,19 @@ async def entrypoint(ctx: JobContext):
 
     @session.on("metrics_collected")
     def on_metrics(ev: MetricsCollectedEvent):
+        nonlocal last_stt_ms
         m = ev.metrics
         speech_id = getattr(m, "speech_id", None) or "unknown"
 
         if m.type == "stt_metrics":
             dur_ms = m.duration * 1000
-            turn_metrics[speech_id]["stt_ms"] = dur_ms
-            logger.info("[%s] STT complete: %.0fms (model=%s)", speech_id, dur_ms, stt_model)
+            last_stt_ms = dur_ms
+            logger.info("[stt] STT complete: %.0fms (model=%s)", dur_ms, stt_model)
 
         elif m.type == "llm_metrics":
             ttft_ms = m.ttft * 1000
             dur_ms = m.duration * 1000
+            turn_metrics[speech_id]["stt_ms"] = last_stt_ms
             turn_metrics[speech_id]["llm_ttft_ms"] = ttft_ms
             turn_metrics[speech_id]["llm_total_ms"] = dur_ms
             logger.info("[%s] LLM complete: ttft=%.0fms total=%.0fms (model=%s)",
@@ -169,32 +248,31 @@ async def entrypoint(ctx: JobContext):
         elif m.type == "tts_metrics":
             ttfb_ms = m.ttfb * 1000
             dur_ms = m.duration * 1000
-            turn_metrics[speech_id]["tts_ttfb_ms"] = ttfb_ms
-            turn_metrics[speech_id]["tts_total_ms"] = dur_ms
-            logger.info("[%s] TTS complete: ttfb=%.0fms total=%.0fms (model=%s)",
+            data = turn_metrics[speech_id]
+            logger.info("[%s] TTS segment: ttfb=%.0fms total=%.0fms (model=%s)",
                          speech_id, ttfb_ms, dur_ms, tts_model)
 
-            data = turn_metrics[speech_id]
-            stt = data.get("stt_ms", 0)
-            llm_ttft = data.get("llm_ttft_ms", 0)
-            tts_ttfb = ttfb_ms
-            total = stt + llm_ttft + tts_ttfb
+            if "published" not in data:
+                data["published"] = True
+                stt = data.get("stt_ms", last_stt_ms)
+                llm_ttft = data.get("llm_ttft_ms", 0)
+                total = stt + llm_ttft + ttfb_ms
 
-            logger.info("[%s] === Pipeline total: %.0fms (STT=%.0f + LLM_TTFT=%.0f + TTS_TTFB=%.0f) ===",
-                         speech_id, total, stt, llm_ttft, tts_ttfb)
+                logger.info("[%s] === Pipeline total: %.0fms (STT=%.0f + LLM_TTFT=%.0f + TTS_TTFB=%.0f) ===",
+                             speech_id, total, stt, llm_ttft, ttfb_ms)
 
-            timing_payload = json.dumps({
-                "speech_id": speech_id,
-                "stt_ms": stt,
-                "llm_ttft_ms": llm_ttft,
-                "llm_total_ms": data.get("llm_total_ms", 0),
-                "tts_ttfb_ms": tts_ttfb,
-                "tts_total_ms": dur_ms,
-                "total_ms": total,
-            })
-            asyncio.create_task(
-                ctx.room.local_participant.publish_data(timing_payload, topic="timing")
-            )
+                timing_payload = json.dumps({
+                    "speech_id": speech_id,
+                    "stt_ms": stt,
+                    "llm_ttft_ms": llm_ttft,
+                    "llm_total_ms": data.get("llm_total_ms", 0),
+                    "tts_ttfb_ms": ttfb_ms,
+                    "tts_total_ms": dur_ms,
+                    "total_ms": total,
+                })
+                asyncio.create_task(
+                    ctx.room.local_participant.publish_data(timing_payload, topic="timing")
+                )
 
     instructions = build_instructions(llm_model)
 
