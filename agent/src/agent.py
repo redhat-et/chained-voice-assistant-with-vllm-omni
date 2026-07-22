@@ -94,7 +94,7 @@ async def strip_thinking_tags(stream):
 
 
 def build_instructions(llm_model):
-    instructions = "You are a helpful voice assistant. Respond naturally and concisely. You have access to tools — use them when appropriate."
+    instructions = "You are a helpful voice assistant. Respond naturally and concisely."
     if "qwen" in llm_model.lower():
         instructions += " /no_think"
     return instructions
@@ -191,7 +191,7 @@ def normalize_audio_frame(frame: rtc.AudioFrame, target_rms: float = TARGET_RMS)
 
 class VoiceAssistant(Agent):
     def __init__(self, instructions: str = "You are a helpful voice assistant. Respond naturally and concisely.") -> None:
-        super().__init__(instructions=instructions, tools=[get_weather])
+        super().__init__(instructions=instructions)
 
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
@@ -322,7 +322,7 @@ async def entrypoint(ctx: JobContext):
 
     @session.on("metrics_collected")
     def on_metrics(ev: MetricsCollectedEvent):
-        nonlocal last_stt_ms
+        nonlocal last_stt_ms, last_stt_audio_duration_ms
         m = ev.metrics
         speech_id = getattr(m, "speech_id", None) or "unknown"
 
