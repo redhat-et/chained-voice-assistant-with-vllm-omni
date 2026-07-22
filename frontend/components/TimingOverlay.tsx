@@ -60,21 +60,21 @@ function TurnRow({ timing, index }: { timing: TimingData; index: number }) {
       {hasDetails && (
         <div className="flex flex-wrap items-center gap-3 pl-7 text-zinc-500">
           {hasSttAudio && (
-            <span>spoke {formatMs(timing.stt_audio_duration_ms!)}</span>
+            <span className="text-blue-600">spoke {formatMs(timing.stt_audio_duration_ms!)}</span>
           )}
           {hasTokS && (
-            <span className="text-green-700">{formatTokS(timing.llm_tokens_per_second!)} tok/s</span>
+            <span className="text-green-600">{formatTokS(timing.llm_tokens_per_second!)} tok/s</span>
           )}
           {hasTokens && (
-            <span className="text-green-900">
+            <span className="text-green-700">
               {timing.llm_prompt_tokens ?? 0}&rarr;{timing.llm_completion_tokens ?? 0} tok
             </span>
           )}
           {hasTtsAudio && (
-            <span className="text-purple-800">{formatMs(timing.tts_audio_duration_ms!)} audio</span>
+            <span className="text-purple-500">{formatMs(timing.tts_audio_duration_ms!)} audio</span>
           )}
           {hasTtsChars && (
-            <span className="text-purple-900">{timing.tts_characters} chars</span>
+            <span className="text-purple-600">{timing.tts_characters} chars</span>
           )}
         </div>
       )}
