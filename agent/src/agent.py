@@ -269,6 +269,7 @@ async def entrypoint(ctx: JobContext):
 
     turn_metrics = defaultdict(dict)
     last_stt_ms = 0.0
+    last_stt_audio_duration_ms = 0.0
 
     @session.on("user_state_changed")
     def on_user_state(ev: UserStateChangedEvent):
@@ -303,7 +304,7 @@ async def entrypoint(ctx: JobContext):
         timing_payload = json.dumps({
             "speech_id": speech_id,
             "stt_ms": stt,
-            "stt_audio_duration_ms": data.get("stt_audio_duration_ms", 0),
+            "stt_audio_duration_ms": data.get("stt_audio_duration_ms", last_stt_audio_duration_ms),
             "llm_ttft_ms": llm_ttft,
             "llm_total_ms": data.get("llm_total_ms", 0),
             "llm_tokens_per_second": data.get("llm_tokens_per_second", 0),
@@ -328,13 +329,14 @@ async def entrypoint(ctx: JobContext):
         if m.type == "stt_metrics":
             dur_ms = m.duration * 1000
             last_stt_ms = dur_ms
-            turn_metrics[speech_id]["stt_audio_duration_ms"] = m.audio_duration * 1000
-            logger.info("[stt] STT complete: %.0fms (model=%s)", dur_ms, stt_model)
+            last_stt_audio_duration_ms = m.audio_duration * 1000
+            logger.info("[stt] STT complete: %.0fms audio=%.0fms (model=%s)", dur_ms, last_stt_audio_duration_ms, stt_model)
 
         elif m.type == "llm_metrics":
             ttft_ms = m.ttft * 1000
             dur_ms = m.duration * 1000
             turn_metrics[speech_id]["stt_ms"] = last_stt_ms
+            turn_metrics[speech_id]["stt_audio_duration_ms"] = last_stt_audio_duration_ms
             turn_metrics[speech_id]["llm_ttft_ms"] = ttft_ms
             turn_metrics[speech_id]["llm_total_ms"] = dur_ms
             turn_metrics[speech_id]["llm_tokens_per_second"] = m.tokens_per_second
