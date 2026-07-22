@@ -10,6 +10,7 @@ FROM base AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN grep -c "spoken" components/TimingOverlay.tsx && cat components/TimingOverlay.tsx | head -5
 RUN pnpm build
 
 FROM base AS runner
