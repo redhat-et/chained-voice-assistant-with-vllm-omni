@@ -7,6 +7,7 @@ import struct
 from collections import defaultdict
 from collections.abc import AsyncIterable, AsyncGenerator
 
+import httpx
 from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import (
@@ -19,6 +20,7 @@ from livekit.agents import (
     tokenize,
     tts,
 )
+from livekit.agents.llm import function_tool
 from livekit.agents.voice import ModelSettings
 from livekit.agents.voice.events import (
     UserStateChangedEvent,
@@ -28,6 +30,7 @@ from livekit.agents.voice.events import (
     ErrorEvent,
 )
 from livekit.plugins import openai, silero
+from livekit.plugins.openai.tts import AUDIO_STREAM_MODELS
 
 load_dotenv(".env.local")
 logger = logging.getLogger("voice-assistant")
@@ -49,6 +52,11 @@ LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-3-4b-it")
 TTS_BASE_URL = os.getenv("TTS_BASE_URL", "http://localhost:8003/v1")
 TTS_MODEL = os.getenv("TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
 TTS_VOICE = os.getenv("TTS_VOICE", "vivian")
+
+AUDIO_STREAM_MODELS.update({
+    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "mistralai/Voxtral-4B-TTS-2603",
+})
 
 server = AgentServer()
 
@@ -86,10 +94,64 @@ async def strip_thinking_tags(stream):
 
 
 def build_instructions(llm_model):
-    instructions = "You are a helpful voice assistant. Respond naturally and concisely."
+    instructions = "You are a helpful voice assistant. Respond naturally and concisely. You have access to tools — use them when appropriate."
     if "qwen" in llm_model.lower():
         instructions += " /no_think"
     return instructions
+
+
+WMO_WEATHER_CODES = {
+    0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
+    45: "foggy", 48: "depositing rime fog",
+    51: "light drizzle", 53: "moderate drizzle", 55: "dense drizzle",
+    61: "slight rain", 63: "moderate rain", 65: "heavy rain",
+    71: "slight snowfall", 73: "moderate snowfall", 75: "heavy snowfall",
+    77: "snow grains", 80: "slight rain showers", 81: "moderate rain showers",
+    82: "violent rain showers", 85: "slight snow showers", 86: "heavy snow showers",
+    95: "thunderstorm", 96: "thunderstorm with slight hail",
+    99: "thunderstorm with heavy hail",
+}
+
+
+@function_tool()
+async def get_weather(location: str) -> str:
+    """Get the current weather for a location."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        geo = await client.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": location, "count": 1},
+        )
+        geo_data = geo.json()
+        results = geo_data.get("results")
+        if not results:
+            return f"Sorry, I could not find a location called {location}."
+
+        place = results[0]
+        lat, lon = place["latitude"], place["longitude"]
+        name = place.get("name", location)
+        country = place.get("country", "")
+
+        weather = await client.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+            },
+        )
+        current = weather.json().get("current", {})
+        temp = current.get("temperature_2m")
+        humidity = current.get("relative_humidity_2m")
+        wind = current.get("wind_speed_10m")
+        code = current.get("weather_code", -1)
+        condition = WMO_WEATHER_CODES.get(code, "unknown conditions")
+
+        return (
+            f"{name}, {country}: {condition}, "
+            f"{temp} degrees Celsius, "
+            f"{humidity} percent humidity, "
+            f"wind {wind} kilometers per hour."
+        )
 
 
 TARGET_RMS = 3000
@@ -129,7 +191,7 @@ def normalize_audio_frame(frame: rtc.AudioFrame, target_rms: float = TARGET_RMS)
 
 class VoiceAssistant(Agent):
     def __init__(self, instructions: str = "You are a helpful voice assistant. Respond naturally and concisely.") -> None:
-        super().__init__(instructions=instructions)
+        super().__init__(instructions=instructions, tools=[get_weather])
 
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
@@ -143,7 +205,7 @@ class VoiceAssistant(Agent):
             wrapped_tts = tts.StreamAdapter(
                 tts=wrapped_tts,
                 sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
-                    min_token_len=TTS_MIN_TOKEN_LEN,
+                    min_sentence_len=TTS_MIN_TOKEN_LEN,
                     retain_format=True,
                 ),
             )
@@ -234,6 +296,7 @@ async def entrypoint(ctx: JobContext):
         if m.type == "stt_metrics":
             dur_ms = m.duration * 1000
             last_stt_ms = dur_ms
+            turn_metrics[speech_id]["stt_audio_duration_ms"] = m.audio_duration * 1000
             logger.info("[stt] STT complete: %.0fms (model=%s)", dur_ms, stt_model)
 
         elif m.type == "llm_metrics":
@@ -242,15 +305,20 @@ async def entrypoint(ctx: JobContext):
             turn_metrics[speech_id]["stt_ms"] = last_stt_ms
             turn_metrics[speech_id]["llm_ttft_ms"] = ttft_ms
             turn_metrics[speech_id]["llm_total_ms"] = dur_ms
-            logger.info("[%s] LLM complete: ttft=%.0fms total=%.0fms (model=%s)",
-                         speech_id, ttft_ms, dur_ms, llm_model)
+            turn_metrics[speech_id]["llm_tokens_per_second"] = m.tokens_per_second
+            turn_metrics[speech_id]["llm_prompt_tokens"] = m.prompt_tokens
+            turn_metrics[speech_id]["llm_completion_tokens"] = m.completion_tokens
+            logger.info("[%s] LLM complete: ttft=%.0fms total=%.0fms tok/s=%.1f prompt=%d completion=%d (model=%s)",
+                         speech_id, ttft_ms, dur_ms, m.tokens_per_second,
+                         m.prompt_tokens, m.completion_tokens, llm_model)
 
         elif m.type == "tts_metrics":
             ttfb_ms = m.ttfb * 1000
             dur_ms = m.duration * 1000
             data = turn_metrics[speech_id]
-            logger.info("[%s] TTS segment: ttfb=%.0fms total=%.0fms (model=%s)",
-                         speech_id, ttfb_ms, dur_ms, tts_model)
+            logger.info("[%s] TTS segment: ttfb=%.0fms total=%.0fms audio=%.1fs chars=%d (model=%s)",
+                         speech_id, ttfb_ms, dur_ms, m.audio_duration,
+                         m.characters_count, tts_model)
 
             if "published" not in data:
                 data["published"] = True
@@ -264,10 +332,16 @@ async def entrypoint(ctx: JobContext):
                 timing_payload = json.dumps({
                     "speech_id": speech_id,
                     "stt_ms": stt,
+                    "stt_audio_duration_ms": data.get("stt_audio_duration_ms", 0),
                     "llm_ttft_ms": llm_ttft,
                     "llm_total_ms": data.get("llm_total_ms", 0),
+                    "llm_tokens_per_second": data.get("llm_tokens_per_second", 0),
+                    "llm_prompt_tokens": data.get("llm_prompt_tokens", 0),
+                    "llm_completion_tokens": data.get("llm_completion_tokens", 0),
                     "tts_ttfb_ms": ttfb_ms,
                     "tts_total_ms": dur_ms,
+                    "tts_audio_duration_ms": m.audio_duration * 1000,
+                    "tts_characters": m.characters_count,
                     "total_ms": total,
                 })
                 asyncio.create_task(

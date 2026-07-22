@@ -35,27 +35,42 @@ AVAILABLE_TTS = [
 # --- STT model configs (different images/envs per engine) ---
 
 STT_IMAGE_MAP = {
-    "Systran/faster-whisper-large-v3": "fedirz/faster-whisper-server:0.5-cuda",
-    "Systran/faster-whisper-medium":   "fedirz/faster-whisper-server:0.5-cuda",
-    "Qwen/Qwen3-ASR-0.6B":            "lancelrq/qwen3-asr-service:latest",
+    "Systran/faster-whisper-large-v3": "fedirz/faster-whisper-server:0.5-cpu",
+    "Systran/faster-whisper-medium":   "fedirz/faster-whisper-server:0.5-cpu",
+    "Qwen/Qwen3-ASR-0.6B":            "lancelrq/qwen3-asr-service:latest-cpu",
 }
 
 STT_ENV_CONFIG = {
     "Systran/faster-whisper-large-v3": [
         {"name": "WHISPER__MODEL", "value": "Systran/faster-whisper-large-v3"},
+        {"name": "WHISPER__COMPUTE_TYPE", "value": "int8"},
+        {"name": "WHISPER__MODEL_TTL", "value": "-1"},
     ],
     "Systran/faster-whisper-medium": [
         {"name": "WHISPER__MODEL", "value": "Systran/faster-whisper-medium"},
+        {"name": "WHISPER__COMPUTE_TYPE", "value": "int8"},
+        {"name": "WHISPER__MODEL_TTL", "value": "-1"},
     ],
     "Qwen/Qwen3-ASR-0.6B": [
         {"name": "MODEL_ID", "value": "Qwen/Qwen3-ASR-0.6B"},
     ],
 }
 
+STT_COMMAND_MAP = {
+    "Systran/faster-whisper-large-v3": None,
+    "Systran/faster-whisper-medium": None,
+    "Qwen/Qwen3-ASR-0.6B": ["--device", "cpu", "--model-size", "0.6b",
+                             "--port", "8000", "--enable-openai-api"],
+}
+
 STT_HEALTH_PATHS = {
     "Systran/faster-whisper-large-v3": "/v1/models",
     "Systran/faster-whisper-medium": "/v1/models",
     "Qwen/Qwen3-ASR-0.6B": "/compat/openai/v1/models",
+}
+
+STT_MODEL_IDS = {
+    "Qwen/Qwen3-ASR-0.6B": "qwen3-asr-0.6b",
 }
 
 # --- LLM model configs (different vLLM args per model) ---
@@ -69,6 +84,8 @@ LLM_ARGS_MAP = {
         "--max-model-len", "2048",
         "--enforce-eager",
         "--chat-template", "/etc/chat-template/gemma-chat-template.jinja",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser", "hermes",
     ],
     "Qwen/Qwen3-0.6B": [
         "$(LLM_ACTIVE_MODEL)",
@@ -76,6 +93,8 @@ LLM_ARGS_MAP = {
         "--port", "8002",
         "--gpu-memory-utilization", "$(LLM_GPU_UTIL)",
         "--max-model-len", "2048",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser", "hermes",
     ],
     "mistralai/Mistral-7B-Instruct-v0.3": [
         "$(LLM_ACTIVE_MODEL)",
@@ -84,6 +103,8 @@ LLM_ARGS_MAP = {
         "--gpu-memory-utilization", "$(LLM_GPU_UTIL)",
         "--max-model-len", "2048",
         "--enforce-eager",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser", "hermes",
     ],
 }
 
@@ -163,7 +184,8 @@ def check_model_endpoint(kind, model):
     try:
         resp = urllib.request.urlopen(f"{base_url}{path}", timeout=3)
         data = json.loads(resp.read())
-        return any(m["id"] == model for m in data.get("data", []))
+        expected_id = STT_MODEL_IDS.get(model, model) if kind == "stt" else model
+        return any(m["id"] == expected_id for m in data.get("data", []))
     except Exception:
         return False
 
@@ -182,7 +204,8 @@ def wait_for_model(kind, model, timeout=300):
             resp = urllib.request.urlopen(url, timeout=3)
             data = json.loads(resp.read())
             serving = [m["id"] for m in data.get("data", [])]
-            if model in serving:
+            expected_id = STT_MODEL_IDS.get(model, model) if kind == "stt" else model
+            if expected_id in serving:
                 print(f"  [{kind}] model {model} is serving")
                 return True
             print(f"  [{kind}] waiting for {model}, currently serving: {serving}")
@@ -212,23 +235,26 @@ def restart_deployment(name):
 
 
 def patch_stt_deployment(model):
-    """STT runs as sidecar in LLM pod — patch the stt container there."""
     image = STT_IMAGE_MAP[model]
     env_list = [client.V1EnvVar(**e) for e in STT_ENV_CONFIG[model]]
+    cmd_args = STT_COMMAND_MAP.get(model)
+    health_path = STT_HEALTH_PATHS.get(model, "/health")
 
-    deployment = apps_v1.read_namespaced_deployment("llm", NAMESPACE)
-    for container in deployment.spec.template.spec.containers:
-        if container.name == "stt":
-            container.image = image
-            container.env = env_list
-            break
+    deployment = apps_v1.read_namespaced_deployment("stt", NAMESPACE)
+    container = deployment.spec.template.spec.containers[0]
+    container.image = image
+    container.env = env_list
+    container.command = None
+    container.args = cmd_args
+    if container.readiness_probe and container.readiness_probe.http_get:
+        container.readiness_probe.http_get.path = health_path
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     if not deployment.spec.template.metadata.annotations:
         deployment.spec.template.metadata.annotations = {}
     deployment.spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"] = now
 
-    apps_v1.replace_namespaced_deployment("llm", NAMESPACE, deployment)
+    apps_v1.replace_namespaced_deployment("stt", NAMESPACE, deployment)
 
 
 def patch_gpu_deployment(kind, model):

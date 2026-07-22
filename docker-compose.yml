@@ -8,58 +8,38 @@ services:
     restart: unless-stopped
 
   stt-whisper:
-    image: fedirz/faster-whisper-server:0.5-cuda
-    runtime: nvidia
+    image: fedirz/faster-whisper-server:0.5-cpu
     environment:
       - WHISPER__MODEL=Systran/faster-whisper-large-v3
+      - WHISPER__COMPUTE_TYPE=int8
+      - WHISPER__MODEL_TTL=-1
     ports:
       - "8001:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
 
   stt-whisper-medium:
-    image: fedirz/faster-whisper-server:0.5-cuda
-    runtime: nvidia
+    image: fedirz/faster-whisper-server:0.5-cpu
     environment:
       - WHISPER__MODEL=Systran/faster-whisper-medium
+      - WHISPER__COMPUTE_TYPE=int8
+      - WHISPER__MODEL_TTL=-1
     ports:
       - "8001:8000"
     profiles:
       - stt-whisper-medium
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
 
   stt-qwen:
-    image: lancelrq/qwen3-asr-service:latest
-    runtime: nvidia
-    command: --device cuda --model-size 0.6b --port 8000 --enable-openai-api
+    image: lancelrq/qwen3-asr-service:latest-cpu
+    command: --device cpu --model-size 0.6b --port 8000 --enable-openai-api
     ports:
       - "8001:8000"
     profiles:
       - stt-qwen
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
 
   tts:
-    image: quay.io/vllm/automation-vllm-omni:cuda-28466746130
+    image: vllm/vllm-omni:v0.24.0
     runtime: nvidia
     shm_size: "8g"
     environment:
@@ -98,6 +78,8 @@ services:
       --gpu-memory-utilization ${LLM_GPU_UTIL:-0.4}
       --max-model-len 2048
       --enforce-eager
+      --enable-auto-tool-choice
+      --tool-call-parser hermes
     ports:
       - "8002:8002"
     volumes:
