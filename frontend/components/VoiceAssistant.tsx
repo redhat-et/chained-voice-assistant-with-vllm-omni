@@ -42,7 +42,15 @@ function AgentVisualizer() {
           const data: TimingData = JSON.parse(
             new TextDecoder().decode(payload)
           );
-          setHistory((prev) => [...prev, data]);
+          setHistory((prev) => {
+            const idx = prev.findIndex((t) => t.speech_id === data.speech_id);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], ...data };
+              return updated;
+            }
+            return [...prev, data];
+          });
         } catch {
           // ignore malformed timing data
         }

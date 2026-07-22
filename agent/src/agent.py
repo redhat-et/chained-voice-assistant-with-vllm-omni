@@ -287,6 +287,38 @@ async def entrypoint(ctx: JobContext):
         logger.error(">>> ERROR: type=%s label=%s error=%r recoverable=%s",
                       ev.error.type, ev.error.label, ev.error.error, ev.error.recoverable)
 
+    def publish_timing(speech_id):
+        data = turn_metrics[speech_id]
+        if "has_tts" not in data:
+            return
+
+        stt = data.get("stt_ms", last_stt_ms)
+        llm_ttft = data.get("llm_ttft_ms", 0)
+        tts_ttfb = data["tts_ttfb_ms"]
+        total = stt + llm_ttft + tts_ttfb
+
+        logger.info("[%s] === Pipeline total: %.0fms (STT=%.0f + LLM_TTFT=%.0f + TTS_TTFB=%.0f) ===",
+                     speech_id, total, stt, llm_ttft, tts_ttfb)
+
+        timing_payload = json.dumps({
+            "speech_id": speech_id,
+            "stt_ms": stt,
+            "stt_audio_duration_ms": data.get("stt_audio_duration_ms", 0),
+            "llm_ttft_ms": llm_ttft,
+            "llm_total_ms": data.get("llm_total_ms", 0),
+            "llm_tokens_per_second": data.get("llm_tokens_per_second", 0),
+            "llm_prompt_tokens": data.get("llm_prompt_tokens", 0),
+            "llm_completion_tokens": data.get("llm_completion_tokens", 0),
+            "tts_ttfb_ms": tts_ttfb,
+            "tts_total_ms": data.get("tts_total_ms", 0),
+            "tts_audio_duration_ms": data.get("tts_audio_duration_ms", 0),
+            "tts_characters": data.get("tts_characters", 0),
+            "total_ms": total,
+        })
+        asyncio.create_task(
+            ctx.room.local_participant.publish_data(timing_payload, topic="timing")
+        )
+
     @session.on("metrics_collected")
     def on_metrics(ev: MetricsCollectedEvent):
         nonlocal last_stt_ms
@@ -311,6 +343,7 @@ async def entrypoint(ctx: JobContext):
             logger.info("[%s] LLM complete: ttft=%.0fms total=%.0fms tok/s=%.1f prompt=%d completion=%d (model=%s)",
                          speech_id, ttft_ms, dur_ms, m.tokens_per_second,
                          m.prompt_tokens, m.completion_tokens, llm_model)
+            publish_timing(speech_id)
 
         elif m.type == "tts_metrics":
             ttfb_ms = m.ttfb * 1000
@@ -320,33 +353,13 @@ async def entrypoint(ctx: JobContext):
                          speech_id, ttfb_ms, dur_ms, m.audio_duration,
                          m.characters_count, tts_model)
 
-            if "published" not in data:
-                data["published"] = True
-                stt = data.get("stt_ms", last_stt_ms)
-                llm_ttft = data.get("llm_ttft_ms", 0)
-                total = stt + llm_ttft + ttfb_ms
-
-                logger.info("[%s] === Pipeline total: %.0fms (STT=%.0f + LLM_TTFT=%.0f + TTS_TTFB=%.0f) ===",
-                             speech_id, total, stt, llm_ttft, ttfb_ms)
-
-                timing_payload = json.dumps({
-                    "speech_id": speech_id,
-                    "stt_ms": stt,
-                    "stt_audio_duration_ms": data.get("stt_audio_duration_ms", 0),
-                    "llm_ttft_ms": llm_ttft,
-                    "llm_total_ms": data.get("llm_total_ms", 0),
-                    "llm_tokens_per_second": data.get("llm_tokens_per_second", 0),
-                    "llm_prompt_tokens": data.get("llm_prompt_tokens", 0),
-                    "llm_completion_tokens": data.get("llm_completion_tokens", 0),
-                    "tts_ttfb_ms": ttfb_ms,
-                    "tts_total_ms": dur_ms,
-                    "tts_audio_duration_ms": m.audio_duration * 1000,
-                    "tts_characters": m.characters_count,
-                    "total_ms": total,
-                })
-                asyncio.create_task(
-                    ctx.room.local_participant.publish_data(timing_payload, topic="timing")
-                )
+            if "has_tts" not in data:
+                data["has_tts"] = True
+                data["tts_ttfb_ms"] = ttfb_ms
+                data["tts_total_ms"] = dur_ms
+                data["tts_audio_duration_ms"] = m.audio_duration * 1000
+                data["tts_characters"] = m.characters_count
+                publish_timing(speech_id)
 
     instructions = build_instructions(llm_model)
 
