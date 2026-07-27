@@ -133,6 +133,10 @@ export default function ModelSelector({
     if (newMode === "2-stage" && audioLlmSet.size > 0 && !audioLlmSet.has(selection.llm_model)) {
       newSelection.llm_model = [...audioLlmSet][0];
     }
+    if (newMode === "3-stage" && audioLlmSet.has(selection.llm_model)) {
+      const nonAudioLlm = allLlmModels.find((m) => !audioLlmSet.has(m.id));
+      if (nonAudioLlm) newSelection.llm_model = nonAudioLlm.id;
+    }
     onSelectionChange(newSelection);
   };
 
