@@ -103,16 +103,43 @@ export default function VoiceAssistant() {
 
   useEffect(() => {
     if (!modelSelection || modelSelection.pipeline_mode !== "2-stage") return;
-    fetch("/api/switch-llm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: modelSelection.llm_model }),
-    }).catch(() => {});
-    fetch("/api/switch-tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: modelSelection.tts_model }),
-    }).catch(() => {});
+    let cancelled = false;
+    (async () => {
+      setConnecting(true);
+      setStatusMsg("Requesting model switches...");
+      try {
+        const results = await Promise.all([
+          fetch("/api/switch-llm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: modelSelection.llm_model }),
+          }),
+          fetch("/api/switch-tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: modelSelection.tts_model }),
+          }),
+        ]);
+        if (results.every((r) => r.status === 200)) {
+          if (!cancelled) { setConnecting(false); setStatusMsg(""); }
+          return;
+        }
+        const deadline = Date.now() + 300_000;
+        while (!cancelled && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const res = await fetch("/api/switch-status");
+          if (!res.ok) continue;
+          const status = await res.json();
+          const loading: string[] = [];
+          if (!status.llm?.ready) loading.push("Audio LLM");
+          if (!status.tts?.ready) loading.push("TTS");
+          if (loading.length === 0) break;
+          if (!cancelled) setStatusMsg(`Loading ${loading.join(", ")}...`);
+        }
+      } catch { /* ignore */ }
+      if (!cancelled) { setConnecting(false); setStatusMsg(""); }
+    })();
+    return () => { cancelled = true; };
   }, [modelSelection?.pipeline_mode, modelSelection?.llm_model, modelSelection?.tts_model]);
 
   const handleConnect = useCallback(async () => {
@@ -269,21 +296,36 @@ export default function VoiceAssistant() {
         />
         {is2Stage && (
           <div className="flex flex-col gap-4 w-full">
+            {connecting && statusMsg && (
+              <div className="flex items-center justify-center gap-3 rounded-xl border border-yellow-700/50 bg-yellow-900/20 px-4 py-3">
+                <svg className="h-5 w-5 animate-spin text-yellow-400" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span className="text-sm text-yellow-300">{statusMsg}</span>
+              </div>
+            )}
             <label
-              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-purple-500"); }}
+              onDragOver={(e) => { if (!connecting) { e.preventDefault(); e.currentTarget.classList.add("border-purple-500"); } }}
               onDragLeave={(e) => { e.currentTarget.classList.remove("border-purple-500"); }}
               onDrop={(e) => {
                 e.preventDefault();
                 e.currentTarget.classList.remove("border-purple-500");
+                if (connecting) return;
                 const file = e.dataTransfer.files[0];
                 if (file) handleFileUpload(file);
               }}
-              className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-900/60 p-8 cursor-pointer transition-colors hover:border-zinc-500"
+              className={`flex flex-col items-center gap-2 rounded-xl border-2 border-dashed p-8 transition-colors ${
+                connecting
+                  ? "border-zinc-800 bg-zinc-900/30 cursor-not-allowed opacity-50"
+                  : "border-zinc-700 bg-zinc-900/60 cursor-pointer hover:border-zinc-500"
+              }`}
             >
               <input
                 type="file"
                 accept="audio/*"
                 className="hidden"
+                disabled={connecting}
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) handleFileUpload(file);
@@ -292,7 +334,7 @@ export default function VoiceAssistant() {
               />
               <span className="text-2xl">🎵</span>
               <span className="text-sm text-zinc-400">
-                {uploadBusy ? "Processing..." : "Drop an audio file here or click to upload"}
+                {connecting ? "Waiting for models..." : uploadBusy ? "Processing..." : "Drop an audio file here or click to upload"}
               </span>
             </label>
             {uploadError && (
