@@ -2,6 +2,7 @@
 
 export interface TimingData {
   speech_id: string;
+  pipeline_mode?: string;
   stt_ms: number;
   stt_audio_duration_ms?: number;
   llm_ttft_ms: number;
@@ -27,16 +28,21 @@ function MetricLabel({ children }: { children: React.ReactNode }) {
 }
 
 function TurnRow({ timing, index }: { timing: TimingData; index: number }) {
+  const is2Stage = timing.pipeline_mode === "2-stage";
   return (
     <div className="rounded-lg bg-zinc-900/80 px-4 py-2 text-xs font-mono backdrop-blur-sm border border-zinc-800 space-y-1">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-zinc-500 w-4 text-right">{index}</span>
-        <span className="text-blue-400">
-          STT <span className="text-zinc-300">{formatMs(timing.stt_ms)}</span>
-        </span>
-        <span className="text-zinc-600">&rarr;</span>
+        {!is2Stage && (
+          <>
+            <span className="text-blue-400">
+              STT <span className="text-zinc-300">{formatMs(timing.stt_ms)}</span>
+            </span>
+            <span className="text-zinc-600">&rarr;</span>
+          </>
+        )}
         <span className="text-green-400">
-          LLM <span className="text-zinc-300">{formatMs(timing.llm_ttft_ms)}</span>
+          {is2Stage ? "Audio LLM" : "LLM"} <span className="text-zinc-300">{formatMs(timing.llm_ttft_ms)}</span>
           <span className="text-zinc-500">/{formatMs(timing.llm_total_ms)}</span>
         </span>
         <span className="text-zinc-600">&rarr;</span>
@@ -49,10 +55,12 @@ function TurnRow({ timing, index }: { timing: TimingData; index: number }) {
           Total <span className="text-zinc-300">{formatMs(timing.total_ms)}</span>
         </span>
       </div>
-      <div className="flex flex-wrap items-center gap-3 pl-7 text-blue-400">
-        <span className="font-semibold">STT</span>
-        <span><MetricLabel>Audio Duration</MetricLabel> {formatMs(timing.stt_audio_duration_ms ?? 0)}</span>
-      </div>
+      {!is2Stage && (
+        <div className="flex flex-wrap items-center gap-3 pl-7 text-blue-400">
+          <span className="font-semibold">STT</span>
+          <span><MetricLabel>Audio Duration</MetricLabel> {formatMs(timing.stt_audio_duration_ms ?? 0)}</span>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-3 pl-7 text-green-400">
         <span className="font-semibold">LLM</span>
         <span><MetricLabel>Tokens/s</MetricLabel> {Math.round(timing.llm_tokens_per_second ?? 0)}</span>
@@ -77,6 +85,7 @@ function avg(values: number[]): number {
 }
 
 function AveragesRow({ history }: { history: TimingData[] }) {
+  const is2Stage = history[0]?.pipeline_mode === "2-stage";
   const avgStt = avg(history.map((t) => t.stt_ms));
   const avgLlmTtft = avg(history.map((t) => t.llm_ttft_ms));
   const avgTtsTtfb = avg(history.map((t) => t.tts_ttfb_ms));
@@ -89,12 +98,16 @@ function AveragesRow({ history }: { history: TimingData[] }) {
     <div className="rounded-lg bg-zinc-800/80 px-4 py-2 text-xs font-mono backdrop-blur-sm border border-zinc-700 space-y-1">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-zinc-400 font-semibold">AVG</span>
-        <span className="text-blue-400">
-          STT <span className="text-zinc-300">{formatMs(avgStt)}</span>
-        </span>
-        <span className="text-zinc-600">&rarr;</span>
+        {!is2Stage && (
+          <>
+            <span className="text-blue-400">
+              STT <span className="text-zinc-300">{formatMs(avgStt)}</span>
+            </span>
+            <span className="text-zinc-600">&rarr;</span>
+          </>
+        )}
         <span className="text-green-400">
-          LLM TTFT <span className="text-zinc-300">{formatMs(avgLlmTtft)}</span>
+          {is2Stage ? "Audio LLM" : "LLM"} TTFT <span className="text-zinc-300">{formatMs(avgLlmTtft)}</span>
         </span>
         <span className="text-zinc-600">&rarr;</span>
         <span className="text-purple-400">

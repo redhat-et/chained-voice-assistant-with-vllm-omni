@@ -43,10 +43,22 @@ export async function GET() {
     fetchServiceStatus(managerUrl, "tts-status", ttsFallback),
   ]);
 
+  let audioLlm: string[] = [];
+  try {
+    const allRes = await fetch(`${managerUrl}/all-status`, { signal: AbortSignal.timeout(3000) });
+    if (allRes.ok) {
+      const allData = await allRes.json();
+      audioLlm = allData.audio_llm ?? [];
+    }
+  } catch {
+    // model manager unavailable — no audio LLM support
+  }
+
   return NextResponse.json({
     stt: sttStatus.available,
     llm: llmStatus.available,
     tts: ttsStatus.available,
+    audio_llm: audioLlm,
     stt_active: sttStatus.model,
     llm_active: llmStatus.model,
     tts_active: ttsStatus.model,

@@ -101,13 +101,10 @@ export default function VoiceAssistant() {
     if (!modelSelection) return;
     setConnecting(true);
     try {
+      const is2Stage = modelSelection.pipeline_mode === "2-stage";
       setStatusMsg("Requesting model switches...");
-      const switchResults = await Promise.all([
-        fetch("/api/switch-stt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: modelSelection.stt_model }),
-        }),
+
+      const switchCalls = [
         fetch("/api/switch-llm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -118,7 +115,17 @@ export default function VoiceAssistant() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model: modelSelection.tts_model }),
         }),
-      ]);
+      ];
+      if (!is2Stage) {
+        switchCalls.unshift(
+          fetch("/api/switch-stt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: modelSelection.stt_model }),
+          }),
+        );
+      }
+      const switchResults = await Promise.all(switchCalls);
 
       for (const res of switchResults) {
         if (!res.ok && res.status !== 202) {
@@ -132,13 +139,14 @@ export default function VoiceAssistant() {
       if (!allReady) {
         setStatusMsg("Loading models...");
         const deadline = Date.now() + 300_000;
+        const stagesToCheck = is2Stage ? (["llm", "tts"] as const) : (["stt", "llm", "tts"] as const);
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 3000));
           const statusRes = await fetch("/api/switch-status");
           if (!statusRes.ok) continue;
           const status = await statusRes.json();
 
-          for (const kind of ["stt", "llm", "tts"] as const) {
+          for (const kind of stagesToCheck) {
             if (status[kind]?.error) {
               throw new Error(
                 `${kind.toUpperCase()} switch failed: ${status[kind].error}`,
@@ -147,9 +155,9 @@ export default function VoiceAssistant() {
           }
 
           const loading: string[] = [];
-          if (!status.stt?.ready) loading.push("STT");
-          if (!status.llm?.ready) loading.push("LLM");
-          if (!status.tts?.ready) loading.push("TTS");
+          for (const kind of stagesToCheck) {
+            if (!status[kind]?.ready) loading.push(kind.toUpperCase());
+          }
 
           if (loading.length === 0) break;
           setStatusMsg(`Loading ${loading.join(", ")}...`);

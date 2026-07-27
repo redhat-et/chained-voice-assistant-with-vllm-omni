@@ -8,7 +8,10 @@ interface ModelOption {
   voice?: string;
 }
 
+export type PipelineMode = "3-stage" | "2-stage";
+
 export interface ModelSelection {
+  pipeline_mode: PipelineMode;
   stt_model: string;
   llm_model: string;
   tts_model: string;
@@ -19,6 +22,7 @@ export interface AvailableModels {
   stt: string[];
   llm: string[];
   tts: string[];
+  audio_llm?: string[];
 }
 
 const MODEL_CATALOG: Record<string, Omit<ModelOption, "id">> = {
@@ -32,6 +36,7 @@ const MODEL_CATALOG: Record<string, Omit<ModelOption, "id">> = {
   "Qwen/Qwen3-ASR-0.6B": { name: "Qwen3 ASR 0.6B", provenance: "China", flag: "\u{1F1E8}\u{1F1F3}" },
   "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice": { name: "Qwen3 TTS 1.7B", provenance: "China", flag: "\u{1F1E8}\u{1F1F3}", voice: "vivian" },
   "mistralai/Voxtral-4B-TTS-2603": { name: "Voxtral 4B", provenance: "EU", flag: "\u{1F1EA}\u{1F1FA}", voice: "casual_male" },
+  "Qwen/Qwen2-Audio-7B-Instruct": { name: "Qwen2-Audio 7B", provenance: "China", flag: "\u{1F1E8}\u{1F1F3}" },
 };
 
 function modelOptionFromId(id: string): ModelOption {
@@ -58,6 +63,7 @@ export function defaultSelectionFromAvailable(available: AvailableModels, active
   const ttsId = activeTts || available.tts[0] || "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice";
   const ttsEntry = MODEL_CATALOG[ttsId];
   return {
+    pipeline_mode: "3-stage",
     stt_model: sttModel,
     llm_model: llmModel,
     tts_model: ttsId,
@@ -112,9 +118,23 @@ export default function ModelSelector({
   disabled: boolean;
   available: AvailableModels | null;
 }) {
+  const is2Stage = selection.pipeline_mode === "2-stage";
+  const audioLlmSet = new Set(available?.audio_llm ?? []);
+  const hasAudioLlms = audioLlmSet.size > 0;
+
   const sttModels = available?.stt.length ? buildModelList(available.stt) : [modelOptionFromId(selection.stt_model)];
-  const llmModels = available?.llm.length ? buildModelList(available.llm) : [modelOptionFromId(selection.llm_model)];
+  const allLlmModels = available?.llm.length ? buildModelList(available.llm) : [modelOptionFromId(selection.llm_model)];
+  const llmModels = is2Stage ? allLlmModels.filter((m) => audioLlmSet.has(m.id)) : allLlmModels;
   const ttsModels = available?.tts.length ? buildModelList(available.tts) : [modelOptionFromId(selection.tts_model)];
+
+  const handlePipelineToggle = () => {
+    const newMode: PipelineMode = is2Stage ? "3-stage" : "2-stage";
+    const newSelection = { ...selection, pipeline_mode: newMode };
+    if (newMode === "2-stage" && audioLlmSet.size > 0 && !audioLlmSet.has(selection.llm_model)) {
+      newSelection.llm_model = [...audioLlmSet][0];
+    }
+    onSelectionChange(newSelection);
+  };
 
   const handleSttChange = (id: string) => {
     onSelectionChange({ ...selection, stt_model: id });
@@ -134,31 +154,51 @@ export default function ModelSelector({
   };
 
   return (
-    <div className="grid grid-cols-1 gap-4 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 backdrop-blur-sm sm:grid-cols-3">
-      <StageSelector
-        label="Speech-to-Text"
-        icon="🎤"
-        models={sttModels}
-        value={selection.stt_model}
-        onChange={handleSttChange}
-        disabled={disabled}
-      />
-      <StageSelector
-        label="Language Model"
-        icon="🧠"
-        models={llmModels}
-        value={selection.llm_model}
-        onChange={handleLlmChange}
-        disabled={disabled}
-      />
-      <StageSelector
-        label="Text-to-Speech"
-        icon="🔊"
-        models={ttsModels}
-        value={selection.tts_model}
-        onChange={handleTtsChange}
-        disabled={disabled}
-      />
+    <div className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 backdrop-blur-sm">
+      {hasAudioLlms && (
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Pipeline</label>
+          <button
+            onClick={handlePipelineToggle}
+            disabled={disabled}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+              is2Stage
+                ? "bg-purple-600 text-white"
+                : "bg-zinc-700 text-zinc-300 hover:bg-zinc-600"
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
+          >
+            {is2Stage ? "2-Stage (Audio LLM)" : "3-Stage (STT + LLM)"}
+          </button>
+        </div>
+      )}
+      <div className={`grid grid-cols-1 gap-4 ${is2Stage ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}>
+        {!is2Stage && (
+          <StageSelector
+            label="Speech-to-Text"
+            icon="🎤"
+            models={sttModels}
+            value={selection.stt_model}
+            onChange={handleSttChange}
+            disabled={disabled}
+          />
+        )}
+        <StageSelector
+          label={is2Stage ? "Audio Language Model" : "Language Model"}
+          icon="🧠"
+          models={llmModels}
+          value={selection.llm_model}
+          onChange={handleLlmChange}
+          disabled={disabled}
+        />
+        <StageSelector
+          label="Text-to-Speech"
+          icon="🔊"
+          models={ttsModels}
+          value={selection.tts_model}
+          onChange={handleTtsChange}
+          disabled={disabled}
+        />
+      </div>
     </div>
   );
 }

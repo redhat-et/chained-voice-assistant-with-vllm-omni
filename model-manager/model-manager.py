@@ -26,7 +26,10 @@ AVAILABLE_LLM = [
     "google/gemma-3-4b-it",
     "Qwen/Qwen3-0.6B",
     "mistralai/Mistral-7B-Instruct-v0.3",
+    "Qwen/Qwen2-Audio-7B-Instruct",
 ]
+
+AUDIO_LLM_MODELS = ["Qwen/Qwen2-Audio-7B-Instruct"]
 AVAILABLE_TTS = [
     "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
     "mistralai/Voxtral-4B-TTS-2603",
@@ -105,6 +108,15 @@ LLM_ARGS_MAP = {
         "--enforce-eager",
         "--enable-auto-tool-choice",
         "--tool-call-parser", "hermes",
+    ],
+    "Qwen/Qwen2-Audio-7B-Instruct": [
+        "$(LLM_ACTIVE_MODEL)",
+        "--host", "0.0.0.0",
+        "--port", "8002",
+        "--gpu-memory-utilization", "$(LLM_GPU_UTIL)",
+        "--max-model-len", "2048",
+        "--trust-remote-code",
+        "--enforce-eager",
     ],
 }
 
@@ -382,6 +394,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             result = {}
             for k in ["stt", "llm", "tts"]:
                 result[k] = self._build_status(k)
+            result["audio_llm"] = AUDIO_LLM_MODELS
             self._json(200, result)
             return
 

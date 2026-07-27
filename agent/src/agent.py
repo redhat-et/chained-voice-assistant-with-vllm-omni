@@ -1,9 +1,13 @@
 import asyncio
+import base64
 import contextlib
+import io
 import json
 import logging
 import os
 import struct
+import time
+import wave
 from collections import defaultdict
 from collections.abc import AsyncIterable, AsyncGenerator
 
@@ -29,8 +33,10 @@ from livekit.agents.voice.events import (
     MetricsCollectedEvent,
     ErrorEvent,
 )
+from livekit.agents import stt
 from livekit.plugins import openai, silero
 from livekit.plugins.openai import tts as _oai_tts
+from openai import AsyncOpenAI
 
 _oai_tts.AUDIO_STREAM_MODELS.update({
     "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
@@ -83,7 +89,16 @@ def resolve_models(raw_meta, defaults):
         except (json.JSONDecodeError, TypeError):
             pass
 
-    return {"stt": stt, "llm": llm, "tts": tts, "voice": voice}, sources
+    pipeline_mode = "3-stage"
+    if raw_meta and raw_meta.strip():
+        try:
+            meta = json.loads(raw_meta)
+            if meta.get("pipeline_mode"):
+                pipeline_mode = meta["pipeline_mode"]
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return {"stt": stt, "llm": llm, "tts": tts, "voice": voice}, sources, pipeline_mode
 
 
 async def strip_thinking_tags(stream):
@@ -228,44 +243,147 @@ class VoiceAssistant(Agent):
                     await forward_task
 
 
+AUDIO_LLM_MODELS = {"Qwen/Qwen2-Audio-7B-Instruct"}
+
+
+def encode_frames_to_wav(frames: list[rtc.AudioFrame]) -> str:
+    if not frames:
+        return ""
+    sr = frames[0].sample_rate
+    ch = frames[0].num_channels
+    pcm = b"".join(bytes(f.data) for f in frames)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(ch)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(pcm)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    return f"data:audio/wav;base64,{b64}"
+
+
+class OmniAgent(VoiceAssistant):
+    def __init__(self, instructions: str, llm_url: str, llm_model: str) -> None:
+        super().__init__(instructions=instructions)
+        self._llm_url = llm_url
+        self._llm_model = llm_model
+        self._audio_buffer: list[rtc.AudioFrame] = []
+        self._client = AsyncOpenAI(base_url=llm_url, api_key="not-needed")
+
+    async def stt_node(
+        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+    ) -> AsyncGenerator[str, None]:
+        self._audio_buffer.clear()
+        async for frame in audio:
+            self._audio_buffer.append(frame)
+        yield "[audio captured]"
+
+    async def llm_node(
+        self, chat_ctx, tools, model_settings: ModelSettings
+    ) -> AsyncGenerator[str, None]:
+        audio_uri = encode_frames_to_wav(self._audio_buffer)
+        self._audio_buffer.clear()
+        if not audio_uri:
+            yield "I didn't catch any audio. Could you try again?"
+            return
+
+        messages = []
+        for msg in chat_ctx.items:
+            role = getattr(msg, "role", None)
+            if role == "system":
+                messages.append({"role": "system", "content": msg.text_content})
+            elif role == "assistant":
+                messages.append({"role": "assistant", "content": msg.text_content})
+
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "audio_url", "audio_url": {"url": audio_uri}},
+                {"type": "text", "text": "Respond to this audio message."},
+            ],
+        })
+
+        t0 = time.perf_counter()
+        first_token = True
+        stream = await self._client.chat.completions.create(
+            model=self._llm_model,
+            messages=messages,
+            stream=True,
+            max_tokens=512,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                if first_token:
+                    ttft = (time.perf_counter() - t0) * 1000
+                    logger.info("[omni-llm] TTFT: %.0fms", ttft)
+                    first_token = False
+                yield delta.content
+
+
 @server.rtc_session(agent_name="voice-assistant")
 async def entrypoint(ctx: JobContext):
     logger.info("=== Disaggregated Voice Pipeline ===")
 
     defaults = {"stt": STT_MODEL, "llm": LLM_MODEL, "tts": TTS_MODEL, "voice": TTS_VOICE}
     raw_meta = getattr(ctx.job, "metadata", None) or ""
-    models, sources = resolve_models(raw_meta, defaults)
+    models, sources, pipeline_mode = resolve_models(raw_meta, defaults)
     stt_model, llm_model, tts_model, tts_voice = models["stt"], models["llm"], models["tts"], models["voice"]
 
-    stt_url = stt_base_url(stt_model)
-    logger.info("STT: model=%s url=%s (source=%s)", stt_model, stt_url, sources["stt"])
-    logger.info("LLM: model=%s url=%s (source=%s)", llm_model, LLM_BASE_URL, sources["llm"])
-    logger.info("TTS: model=%s voice=%s url=%s (source=%s, voice=%s)",
-                tts_model, tts_voice, TTS_BASE_URL, sources["tts"], sources["voice"])
+    logger.info("Pipeline mode: %s", pipeline_mode)
 
-    session = AgentSession(
-        stt=openai.STT(
-            model=stt_model,
-            base_url=stt_url,
-            api_key="not-needed",
-            language="en",
-        ),
-        llm=openai.LLM(
-            model=llm_model,
-            base_url=LLM_BASE_URL,
-            api_key="not-needed",
-        ),
-        tts=openai.TTS(
-            model=tts_model,
-            voice=tts_voice,
-            base_url=TTS_BASE_URL,
-            api_key="not-needed",
-            response_format="pcm",
-        ),
-        vad=silero.VAD.load(),
-        turn_detection=None,
-        tts_text_transforms=["filter_markdown", "filter_emoji", strip_thinking_tags],
-    )
+    if pipeline_mode == "2-stage":
+        logger.info("LLM (audio): model=%s url=%s (source=%s)", llm_model, LLM_BASE_URL, sources["llm"])
+        logger.info("TTS: model=%s voice=%s url=%s (source=%s, voice=%s)",
+                    tts_model, tts_voice, TTS_BASE_URL, sources["tts"], sources["voice"])
+
+        session = AgentSession(
+            llm=openai.LLM(
+                model=llm_model,
+                base_url=LLM_BASE_URL,
+                api_key="not-needed",
+            ),
+            tts=openai.TTS(
+                model=tts_model,
+                voice=tts_voice,
+                base_url=TTS_BASE_URL,
+                api_key="not-needed",
+                response_format="pcm",
+            ),
+            vad=silero.VAD.load(),
+            turn_detection=None,
+            tts_text_transforms=["filter_markdown", "filter_emoji", strip_thinking_tags],
+        )
+    else:
+        stt_url = stt_base_url(stt_model)
+        logger.info("STT: model=%s url=%s (source=%s)", stt_model, stt_url, sources["stt"])
+        logger.info("LLM: model=%s url=%s (source=%s)", llm_model, LLM_BASE_URL, sources["llm"])
+        logger.info("TTS: model=%s voice=%s url=%s (source=%s, voice=%s)",
+                    tts_model, tts_voice, TTS_BASE_URL, sources["tts"], sources["voice"])
+
+        session = AgentSession(
+            stt=openai.STT(
+                model=stt_model,
+                base_url=stt_url,
+                api_key="not-needed",
+                language="en",
+            ),
+            llm=openai.LLM(
+                model=llm_model,
+                base_url=LLM_BASE_URL,
+                api_key="not-needed",
+            ),
+            tts=openai.TTS(
+                model=tts_model,
+                voice=tts_voice,
+                base_url=TTS_BASE_URL,
+                api_key="not-needed",
+                response_format="pcm",
+            ),
+            vad=silero.VAD.load(),
+            turn_detection=None,
+            tts_text_transforms=["filter_markdown", "filter_emoji", strip_thinking_tags],
+        )
 
     turn_metrics = defaultdict(dict)
     last_stt_ms = 0.0
@@ -303,6 +421,7 @@ async def entrypoint(ctx: JobContext):
 
         timing_payload = json.dumps({
             "speech_id": speech_id,
+            "pipeline_mode": pipeline_mode,
             "stt_ms": stt,
             "stt_audio_duration_ms": data.get("stt_audio_duration_ms", last_stt_audio_duration_ms),
             "llm_ttft_ms": llm_ttft,
@@ -365,9 +484,18 @@ async def entrypoint(ctx: JobContext):
 
     instructions = build_instructions(llm_model)
 
+    if pipeline_mode == "2-stage":
+        agent = OmniAgent(
+            instructions=instructions,
+            llm_url=LLM_BASE_URL,
+            llm_model=llm_model,
+        )
+    else:
+        agent = VoiceAssistant(instructions=instructions)
+
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    await session.start(agent=VoiceAssistant(instructions=instructions), room=ctx.room)
-    logger.info("Voice assistant started — disaggregated pipeline active")
+    await session.start(agent=agent, room=ctx.room)
+    logger.info("Voice assistant started — %s pipeline active", pipeline_mode)
 
 
 if __name__ == "__main__":

@@ -18,9 +18,9 @@ export async function POST(request: Request) {
     const contentType = request.headers.get("content-type") ?? "";
     if (contentType.includes("json")) {
       const body = await request.json();
-      const { stt_model, llm_model, tts_model, tts_voice } = body;
-      if (stt_model || llm_model || tts_model) {
-        modelMetadata = JSON.stringify({ stt_model, llm_model, tts_model, tts_voice });
+      const { pipeline_mode, stt_model, llm_model, tts_model, tts_voice } = body;
+      if (stt_model || llm_model || tts_model || pipeline_mode) {
+        modelMetadata = JSON.stringify({ pipeline_mode, stt_model, llm_model, tts_model, tts_voice });
       }
     }
   } catch {
