@@ -101,6 +101,20 @@ export default function VoiceAssistant() {
       });
   }, []);
 
+  useEffect(() => {
+    if (!modelSelection || modelSelection.pipeline_mode !== "2-stage") return;
+    fetch("/api/switch-llm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelSelection.llm_model }),
+    }).catch(() => {});
+    fetch("/api/switch-tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelSelection.tts_model }),
+    }).catch(() => {});
+  }, [modelSelection?.pipeline_mode, modelSelection?.llm_model, modelSelection?.tts_model]);
+
   const handleConnect = useCallback(async () => {
     if (!modelSelection) return;
     setConnecting(true);
@@ -218,7 +232,7 @@ export default function VoiceAssistant() {
       }
       setUploadResult({ text: data.text, audio: data.audio });
       if (data.audio && audioRef.current) {
-        audioRef.current.src = `data:audio/mp3;base64,${data.audio}`;
+        audioRef.current.src = `data:audio/wav;base64,${data.audio}`;
         audioRef.current.play().catch(() => {});
       }
     } catch (e) {
@@ -290,13 +304,15 @@ export default function VoiceAssistant() {
             )}
           </div>
         )}
-        <button
-          onClick={handleConnect}
-          disabled={connecting}
-          className="rounded-full bg-white px-8 py-4 text-lg font-medium text-black transition-opacity hover:opacity-80 disabled:opacity-50"
-        >
-          {connecting ? (statusMsg || "Connecting...") : "Start Conversation"}
-        </button>
+        {!is2Stage && (
+          <button
+            onClick={handleConnect}
+            disabled={connecting}
+            className="rounded-full bg-white px-8 py-4 text-lg font-medium text-black transition-opacity hover:opacity-80 disabled:opacity-50"
+          >
+            {connecting ? (statusMsg || "Connecting...") : "Start Conversation"}
+          </button>
+        )}
       </div>
     );
   }

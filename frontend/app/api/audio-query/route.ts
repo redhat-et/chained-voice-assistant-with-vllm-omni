@@ -96,7 +96,7 @@ export async function POST(request: Request) {
         model: ttsModel,
         voice: ttsVoice,
         input: text,
-        response_format: "mp3",
+        response_format: "wav",
       }),
       signal: AbortSignal.timeout(120_000),
     });
