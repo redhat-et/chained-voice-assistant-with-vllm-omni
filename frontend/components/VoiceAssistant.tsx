@@ -103,27 +103,40 @@ export default function VoiceAssistant() {
   }, []);
 
   useEffect(() => {
-    if (!modelSelection || modelSelection.pipeline_mode !== "2-stage") {
-      setUploadTimings([]);
-      return;
-    }
+    if (!modelSelection) return;
+    const is2Stage = modelSelection.pipeline_mode === "2-stage";
+    if (!is2Stage) setUploadTimings([]);
     let cancelled = false;
+    const switchCalls: Promise<Response>[] = [
+      fetch("/api/switch-llm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: modelSelection.llm_model }),
+      }),
+      fetch("/api/switch-tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: modelSelection.tts_model }),
+      }),
+    ];
+    if (!is2Stage) {
+      switchCalls.unshift(
+        fetch("/api/switch-stt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelSelection.stt_model }),
+        }),
+      );
+    }
+    const stagesToCheck = is2Stage ? ["llm", "tts"] as const : ["stt", "llm", "tts"] as const;
+    const stageLabels = is2Stage
+      ? { llm: "Audio LLM", tts: "TTS" } as const
+      : { stt: "STT", llm: "LLM", tts: "TTS" } as const;
     (async () => {
       setConnecting(true);
       setStatusMsg("Requesting model switches...");
       try {
-        const results = await Promise.all([
-          fetch("/api/switch-llm", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: modelSelection.llm_model }),
-          }),
-          fetch("/api/switch-tts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: modelSelection.tts_model }),
-          }),
-        ]);
+        const results = await Promise.all(switchCalls);
         if (results.every((r) => r.status === 200)) {
           if (!cancelled) { setConnecting(false); setStatusMsg(""); }
           return;
@@ -135,8 +148,9 @@ export default function VoiceAssistant() {
           if (!res.ok) continue;
           const status = await res.json();
           const loading: string[] = [];
-          if (!status.llm?.ready) loading.push("Audio LLM");
-          if (!status.tts?.ready) loading.push("TTS");
+          for (const kind of stagesToCheck) {
+            if (!status[kind]?.ready) loading.push(stageLabels[kind]);
+          }
           if (loading.length === 0) break;
           if (!cancelled) setStatusMsg(`Loading ${loading.join(", ")}...`);
         }
@@ -144,7 +158,7 @@ export default function VoiceAssistant() {
       if (!cancelled) { setConnecting(false); setStatusMsg(""); }
     })();
     return () => { cancelled = true; };
-  }, [modelSelection?.pipeline_mode, modelSelection?.llm_model, modelSelection?.tts_model]);
+  }, [modelSelection?.pipeline_mode, modelSelection?.llm_model, modelSelection?.tts_model, modelSelection?.stt_model]);
 
   const handleConnect = useCallback(async () => {
     if (!modelSelection) return;
@@ -314,17 +328,17 @@ export default function VoiceAssistant() {
           disabled={false}
           available={available}
         />
+        {connecting && statusMsg && (
+          <div className="flex items-center justify-center gap-3 rounded-xl border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 w-full">
+            <svg className="h-5 w-5 animate-spin text-yellow-400" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span className="text-sm text-yellow-300">{statusMsg}</span>
+          </div>
+        )}
         {is2Stage && (
           <div className="flex flex-col gap-4 w-full">
-            {connecting && statusMsg && (
-              <div className="flex items-center justify-center gap-3 rounded-xl border border-yellow-700/50 bg-yellow-900/20 px-4 py-3">
-                <svg className="h-5 w-5 animate-spin text-yellow-400" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <span className="text-sm text-yellow-300">{statusMsg}</span>
-              </div>
-            )}
             <label
               onDragOver={(e) => { if (!connecting) { e.preventDefault(); e.currentTarget.classList.add("border-purple-500"); } }}
               onDragLeave={(e) => { e.currentTarget.classList.remove("border-purple-500"); }}
