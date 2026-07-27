@@ -128,10 +128,10 @@ export default function VoiceAssistant() {
         }),
       );
     }
-    const stagesToCheck = is2Stage ? ["llm", "tts"] as const : ["stt", "llm", "tts"] as const;
-    const stageLabels = is2Stage
-      ? { llm: "Audio LLM", tts: "TTS" } as const
-      : { stt: "STT", llm: "LLM", tts: "TTS" } as const;
+    const stageLabels: Record<string, string> = is2Stage
+      ? { llm: "Audio LLM", tts: "TTS" }
+      : { stt: "STT", llm: "LLM", tts: "TTS" };
+    const stagesToCheck = Object.keys(stageLabels);
     (async () => {
       setConnecting(true);
       setStatusMsg("Requesting model switches...");
