@@ -78,6 +78,11 @@ STT_MODEL_IDS = {
 
 # --- LLM model configs (different vLLM args per model) ---
 
+LLM_DEFAULT_IMAGE = "vllm/vllm-openai:latest"
+LLM_IMAGE_MAP = {
+    "Qwen/Qwen2-Audio-7B-Instruct": "quay.io/vllm/automation-vllm-omni:cuda-28466746130",
+}
+
 LLM_ARGS_MAP = {
     "google/gemma-3-4b-it": [
         "$(LLM_ACTIVE_MODEL)",
@@ -270,7 +275,7 @@ def patch_stt_deployment(model):
 
 
 def patch_gpu_deployment(kind, model):
-    """Patch LLM or TTS deployment with model-specific container args."""
+    """Patch LLM or TTS deployment with model-specific container args and image."""
     args_map = LLM_ARGS_MAP if kind == "llm" else TTS_ARGS_MAP
     new_args = args_map.get(model)
     if not new_args:
@@ -282,6 +287,12 @@ def patch_gpu_deployment(kind, model):
     deployment = apps_v1.read_namespaced_deployment(dep_name, NAMESPACE)
     container = deployment.spec.template.spec.containers[0]
     container.args = new_args
+
+    if kind == "llm":
+        new_image = LLM_IMAGE_MAP.get(model, LLM_DEFAULT_IMAGE)
+        if container.image != new_image:
+            print(f"  [{kind}] switching image: {container.image} -> {new_image}")
+            container.image = new_image
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     if not deployment.spec.template.metadata.annotations:

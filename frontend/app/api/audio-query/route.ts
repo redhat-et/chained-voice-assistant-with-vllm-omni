@@ -1,8 +1,36 @@
 import { NextResponse } from "next/server";
 
+async function ensureModel(managerUrl: string, kind: string, model: string, timeoutMs = 300_000): Promise<void> {
+  const statusRes = await fetch(`${managerUrl}/${kind}-status`, { signal: AbortSignal.timeout(5000) });
+  if (statusRes.ok) {
+    const status = await statusRes.json();
+    if (status.model === model && status.ready) return;
+  }
+
+  const switchRes = await fetch(`${managerUrl}/switch-${kind}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (switchRes.status === 200) return;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const poll = await fetch(`${managerUrl}/${kind}-status`, { signal: AbortSignal.timeout(5000) });
+    if (!poll.ok) continue;
+    const s = await poll.json();
+    if (s.error) throw new Error(`${kind} switch failed: ${s.error}`);
+    if (s.ready && s.model === model) return;
+  }
+  throw new Error(`${kind} switch to ${model} timed out`);
+}
+
 export async function POST(request: Request) {
-  const llmBase = process.env.LLM_BASE_URL ?? "http://llm:8002";
-  const ttsBase = process.env.TTS_BASE_URL ?? "http://tts:8003";
+  const managerUrl = process.env.MODEL_MANAGER_URL ?? "http://model-manager:8006";
+  const llmBase = process.env.LLM_BASE_URL ?? "http://llm-server:8002";
+  const ttsBase = process.env.TTS_BASE_URL ?? "http://tts-server:8003";
 
   const formData = await request.formData();
   const file = formData.get("audio") as File | null;
@@ -12,6 +40,16 @@ export async function POST(request: Request) {
 
   if (!file) {
     return NextResponse.json({ error: "audio file is required" }, { status: 400 });
+  }
+
+  try {
+    await Promise.all([
+      ensureModel(managerUrl, "llm", llmModel),
+      ensureModel(managerUrl, "tts", ttsModel),
+    ]);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Model switch failed";
+    return NextResponse.json({ error: msg }, { status: 503 });
   }
 
   const arrayBuf = await file.arrayBuffer();
