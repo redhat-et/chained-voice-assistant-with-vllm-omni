@@ -231,16 +231,18 @@ export default function VoiceAssistant() {
         return;
       }
       setUploadResult({ text: data.text, audio: data.audio });
-      if (data.audio && audioRef.current) {
-        audioRef.current.src = `data:audio/wav;base64,${data.audio}`;
-        audioRef.current.play().catch(() => {});
-      }
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploadBusy(false);
     }
   }, [modelSelection]);
+
+  useEffect(() => {
+    if (!uploadResult?.audio || !audioRef.current) return;
+    audioRef.current.src = `data:audio/wav;base64,${uploadResult.audio}`;
+    audioRef.current.play().catch(() => {});
+  }, [uploadResult]);
 
   const handleDisconnected = useCallback(() => {
     setConnectionDetails(null);
