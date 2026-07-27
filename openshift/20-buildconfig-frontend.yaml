@@ -1,0 +1,26 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: frontend
+  namespace: voice-pipeline
+  labels:
+    app.kubernetes.io/name: frontend
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/redhat-et/chained-voice-assistant-with-vllm-omni.git
+      ref: deploy/openshift-runtime-model-selection
+    contextDir: frontend
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: DockerImage
+      name: quay.io/redhat-et/voice-pipeline-frontend:latest
+    pushSecret:
+      name: quay-push-secret
+  triggers:
+    - type: ConfigChange

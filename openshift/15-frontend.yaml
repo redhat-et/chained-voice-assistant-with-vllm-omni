@@ -15,13 +15,14 @@ spec:
       labels:
         app.kubernetes.io/name: frontend
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: dell-l40s-1.bmas-001.lab.rdu2.dc.redhat.com
       containers:
         - name: frontend
           image: quay.io/redhat-et/voice-pipeline-frontend:latest
           env:
             - name: LIVEKIT_URL
-              # value: wss://livekit-<namespace>.apps.<cluster-domain>
-              value: wss://livekit-voice-pipeline.apps.example.com
+              value: wss://livekit-voice-pipeline.apps.alpha.modelarch.org
             - name: LIVEKIT_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -32,6 +33,8 @@ spec:
                 secretKeyRef:
                   name: livekit-credentials
                   key: LIVEKIT_API_SECRET
+            - name: MODEL_MANAGER_URL
+              value: http://model-manager:8006
           ports:
             - containerPort: 3000
               name: http
@@ -72,7 +75,7 @@ metadata:
   name: frontend
   namespace: voice-pipeline
 spec:
-  # host: frontend-<namespace>.apps.<cluster-domain>
+  host: voice-pipeline.apps.alpha.modelarch.org
   to:
     kind: Service
     name: frontend

@@ -11,6 +11,8 @@ services:
     image: fedirz/faster-whisper-server:0.5-cpu
     environment:
       - WHISPER__MODEL=Systran/faster-whisper-large-v3
+      - WHISPER__COMPUTE_TYPE=int8
+      - WHISPER__MODEL_TTL=-1
     ports:
       - "8001:8000"
     restart: unless-stopped
@@ -19,6 +21,8 @@ services:
     image: fedirz/faster-whisper-server:0.5-cpu
     environment:
       - WHISPER__MODEL=Systran/faster-whisper-medium
+      - WHISPER__COMPUTE_TYPE=int8
+      - WHISPER__MODEL_TTL=-1
     ports:
       - "8001:8000"
     profiles:
@@ -75,6 +79,8 @@ services:
       --gpu-memory-utilization ${LLM_GPU_UTIL:-0.4}
       --max-model-len 2048
       --enforce-eager
+      --enable-auto-tool-choice
+      --tool-call-parser hermes
     ports:
       - "8002:8002"
     volumes:

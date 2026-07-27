@@ -15,12 +15,21 @@ spec:
       labels:
         app.kubernetes.io/name: stt
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: dell-l40s-1.bmas-001.lab.rdu2.dc.redhat.com
       containers:
         - name: faster-whisper
           image: fedirz/faster-whisper-server:0.5-cpu
           env:
             - name: WHISPER__MODEL
-              value: Systran/faster-whisper-large-v3
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: STT_ACTIVE_MODEL
+            - name: WHISPER__COMPUTE_TYPE
+              value: int8
+            - name: WHISPER__MODEL_TTL
+              value: "-1"
           ports:
             - containerPort: 8000
               name: http
@@ -33,7 +42,7 @@ spec:
               memory: 8Gi
           readinessProbe:
             httpGet:
-              path: /health
+              path: /v1/models
               port: http
             initialDelaySeconds: 60
             periodSeconds: 10

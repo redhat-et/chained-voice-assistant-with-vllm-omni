@@ -17,21 +17,40 @@ spec:
       labels:
         app.kubernetes.io/name: tts
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: dell-l40s-1.bmas-001.lab.rdu2.dc.redhat.com
       containers:
         - name: vllm-omni
-          image: vllm/vllm-omni:v0.24.0
+          image: quay.io/vllm/automation-vllm-omni:cuda-28466746130
           command: ["vllm", "serve"]
           args:
-            - Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+            - "$(TTS_ACTIVE_MODEL)"
             - --omni
             - --host
             - "0.0.0.0"
             - --port
             - "8003"
             - --trust-remote-code
+            - --gpu-memory-utilization
+            - "$(TTS_GPU_UTIL)"
           env:
+            - name: TTS_ACTIVE_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: TTS_ACTIVE_MODEL
+            - name: TTS_GPU_UTIL
+              valueFrom:
+                configMapKeyRef:
+                  name: model-config
+                  key: TTS_GPU_UTIL
             - name: HOME
               value: /tmp
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
           ports:
             - containerPort: 8003
               name: http
