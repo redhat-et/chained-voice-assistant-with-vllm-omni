@@ -33,6 +33,10 @@ Thumbs.db
 *.tfstate
 *.tfstate.*
 .terraform/
+*.tfvars
+
+# Local docs
+docs/
 
 # Spec Kit
 .specify/

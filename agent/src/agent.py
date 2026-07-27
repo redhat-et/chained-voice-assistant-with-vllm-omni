@@ -30,7 +30,12 @@ from livekit.agents.voice.events import (
     ErrorEvent,
 )
 from livekit.plugins import openai, silero
-from livekit.plugins.openai.tts import AUDIO_STREAM_MODELS
+from livekit.plugins.openai import tts as _oai_tts
+
+_oai_tts.AUDIO_STREAM_MODELS.update({
+    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "mistralai/Voxtral-4B-TTS-2603",
+})
 
 load_dotenv(".env.local")
 logger = logging.getLogger("voice-assistant")
@@ -52,11 +57,6 @@ LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-3-4b-it")
 TTS_BASE_URL = os.getenv("TTS_BASE_URL", "http://localhost:8003/v1")
 TTS_MODEL = os.getenv("TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
 TTS_VOICE = os.getenv("TTS_VOICE", "vivian")
-
-AUDIO_STREAM_MODELS.update({
-    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-    "mistralai/Voxtral-4B-TTS-2603",
-})
 
 server = AgentServer()
 
