@@ -58,6 +58,7 @@ export async function POST(request: Request) {
   const audioUri = `data:${mimeType};base64,${b64}`;
 
   try {
+    const llmStart = Date.now();
     const llmRes = await fetch(`${llmBase}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -83,12 +84,15 @@ export async function POST(request: Request) {
     }
 
     const llmData = await llmRes.json();
+    const llmMs = Date.now() - llmStart;
     const text = llmData.choices?.[0]?.message?.content ?? "";
+    const usage = llmData.usage ?? {};
 
     if (!text) {
       return NextResponse.json({ error: "Audio LLM returned empty response" }, { status: 502 });
     }
 
+    const ttsStart = Date.now();
     const ttsRes = await fetch(`${ttsBase}/v1/audio/speech`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -102,13 +106,23 @@ export async function POST(request: Request) {
     });
 
     if (!ttsRes.ok) {
-      return NextResponse.json({ text, audio: null, error: "TTS failed but text is available" });
+      return NextResponse.json({ text, audio: null, timing: { llm_total_ms: llmMs, tts_total_ms: 0, total_ms: llmMs }, error: "TTS failed but text is available" });
     }
 
     const audioBuf = await ttsRes.arrayBuffer();
+    const ttsMs = Date.now() - ttsStart;
     const audioB64 = Buffer.from(audioBuf).toString("base64");
 
-    return NextResponse.json({ text, audio: audioB64 });
+    const timing = {
+      llm_total_ms: llmMs,
+      llm_prompt_tokens: usage.prompt_tokens ?? 0,
+      llm_completion_tokens: usage.completion_tokens ?? 0,
+      tts_total_ms: ttsMs,
+      tts_characters: text.length,
+      total_ms: llmMs + ttsMs,
+    };
+
+    return NextResponse.json({ text, audio: audioB64, timing });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ error: `Pipeline error: ${msg}` }, { status: 504 });

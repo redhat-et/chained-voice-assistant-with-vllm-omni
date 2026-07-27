@@ -84,6 +84,7 @@ export default function VoiceAssistant() {
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadResult, setUploadResult] = useState<{ text: string; audio: string | null } | null>(null);
   const [uploadError, setUploadError] = useState("");
+  const [uploadTimings, setUploadTimings] = useState<TimingData[]>([]);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
@@ -102,7 +103,10 @@ export default function VoiceAssistant() {
   }, []);
 
   useEffect(() => {
-    if (!modelSelection || modelSelection.pipeline_mode !== "2-stage") return;
+    if (!modelSelection || modelSelection.pipeline_mode !== "2-stage") {
+      setUploadTimings([]);
+      return;
+    }
     let cancelled = false;
     (async () => {
       setConnecting(true);
@@ -258,6 +262,22 @@ export default function VoiceAssistant() {
         return;
       }
       setUploadResult({ text: data.text, audio: data.audio });
+      if (data.timing) {
+        const t = data.timing;
+        setUploadTimings((prev) => [...prev, {
+          speech_id: `upload-${Date.now()}`,
+          pipeline_mode: "2-stage",
+          stt_ms: 0,
+          llm_ttft_ms: t.llm_total_ms,
+          llm_total_ms: t.llm_total_ms,
+          llm_prompt_tokens: t.llm_prompt_tokens,
+          llm_completion_tokens: t.llm_completion_tokens,
+          tts_ttfb_ms: t.tts_total_ms,
+          tts_total_ms: t.tts_total_ms,
+          tts_characters: t.tts_characters,
+          total_ms: t.total_ms,
+        }]);
+      }
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : "Upload failed");
     } finally {
@@ -345,6 +365,9 @@ export default function VoiceAssistant() {
                 <p className="text-sm text-zinc-200">{uploadResult.text}</p>
                 <audio ref={audioRef} controls className="w-full" />
               </div>
+            )}
+            {uploadTimings.length > 0 && (
+              <TimingOverlay history={uploadTimings} />
             )}
           </div>
         )}
