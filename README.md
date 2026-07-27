@@ -22,8 +22,8 @@ All models can be swapped at runtime via the frontend dropdown — no restarts n
 
 | Stage | Model | Origin | Notes |
 |-------|-------|--------|-------|
-| **STT** | Systran/faster-whisper-large-v3 | France | Default, CPU |
-| **STT** | Systran/faster-whisper-medium | France | Lighter, CPU |
+| **STT** | Systran/faster-whisper-large-v3 | US (OpenAI) | Default, CPU |
+| **STT** | Systran/faster-whisper-medium | US (OpenAI) | Lighter, CPU |
 | **STT** | Qwen/Qwen3-ASR-0.6B | China | CPU |
 | **LLM** | google/gemma-3-4b-it | US | Default |
 | **LLM** | Qwen/Qwen3-0.6B | China | |
@@ -76,8 +76,49 @@ python3 scripts/model-manager.py &
 
 Open `http://localhost:3000`, click **Start Conversation**, and speak.
 
+### Option C: OpenShift / Kubernetes
+
+Deploy to an OpenShift cluster with GPU nodes. Manifests are in `openshift/`.
+
+**Prerequisites**: `oc` CLI logged in, a namespace with GPU node access, a HuggingFace token for gated models.
+
+```bash
+# 1. Create namespace and secrets
+oc apply -f openshift/00-namespace.yaml
+oc create secret generic hf-token --from-literal=HF_TOKEN=<your-token> -n voice-pipeline
+oc create secret generic livekit-credentials \
+  --from-literal=LIVEKIT_API_KEY=<key> \
+  --from-literal=LIVEKIT_API_SECRET=<secret> \
+  --from-literal=LIVEKIT_URL=ws://livekit-server.voice-pipeline.svc:7880 \
+  -n voice-pipeline
+
+# 2. Deploy model config and LiveKit
+oc apply -f openshift/02-configmap-livekit.yaml
+oc apply -f openshift/03-configmap-models.yaml
+
+# 3. Deploy services (order matters — GPU pods take 2-5 min)
+oc apply -f openshift/10-livekit.yaml
+oc apply -f openshift/11-stt.yaml
+oc apply -f openshift/12-llm.yaml
+oc apply -f openshift/13-tts.yaml
+
+# 4. Deploy agent, frontend, and model manager
+oc apply -f openshift/14-agent.yaml
+oc apply -f openshift/15-frontend.yaml
+oc apply -f openshift/16-model-manager.yaml
+
+# 5. (Optional) Build frontend from source
+oc apply -f openshift/20-buildconfig-frontend.yaml
+```
+
+The frontend Route is created by `15-frontend.yaml` with TLS edge termination. Access via the route hostname (e.g., `voice-pipeline.apps.<cluster-domain>`).
+
+**Node selectors**: The GPU manifests (`12-llm.yaml`, `13-tts.yaml`) include `nodeSelector` entries. Update these to match your cluster's GPU node hostnames.
+
+**Model switching**: The model manager (`16-model-manager.yaml`) deploys with a ServiceAccount and RBAC to patch ConfigMaps and Deployments in the namespace. It exposes the same `/switch-llm`, `/switch-stt`, `/switch-tts` API as the Docker-based model manager.
+
 <details>
-<summary>Option C: Manual Scripts (Development)</summary>
+<summary>Option D: Manual Scripts (Development)</summary>
 
 For local development without Docker Compose. Requires Python 3.10+, Node 18+ with pnpm, and individual services installed.
 
@@ -109,10 +150,10 @@ cd frontend && pnpm install && pnpm dev --hostname 0.0.0.0
 
 ## Runtime Model Switching
 
-The **model manager** (`scripts/model-manager.py`) is a host-level HTTP API on port 8006 that swaps models without restarting the whole stack:
+The **model manager** is an HTTP API on port 8006 that swaps models without restarting the whole stack:
 
-- **LLM/TTS**: Updates `.env` and runs `docker compose up -d --no-deps <service>` to restart the container with the new model
-- **STT**: Stops the current STT container and starts the one for the selected engine (different Docker images per STT engine)
+- **Docker Compose** (`scripts/model-manager.py`): Updates `.env` and runs `docker compose up -d --no-deps <service>` to restart the container with the new model. STT stops the current container and starts the one for the selected engine.
+- **OpenShift** (`model-manager/model-manager.py`): Runs as an in-cluster Deployment with RBAC. Patches the `model-config` ConfigMap and Deployment args directly via the Kubernetes API.
 
 The frontend dropdown triggers these switches automatically. You can also call the API directly:
 
@@ -167,6 +208,19 @@ infra/
   user_data.sh                  # EC2 bootstrap script
   terraform.tfvars.example      # Variable template
 openshift/                      # OpenShift/Kubernetes manifests
+  00-namespace.yaml             #   Namespace
+  01-secrets.yaml               #   Secret templates (livekit-credentials, hf-token)
+  03-configmap-models.yaml      #   Model defaults (active models, GPU util)
+  10-livekit.yaml               #   LiveKit SFU server
+  11-stt.yaml                   #   STT deployment (CPU) + Service
+  12-llm.yaml                   #   LLM deployment (GPU) + Service
+  13-tts.yaml                   #   TTS deployment (GPU) + Service
+  14-agent.yaml                 #   LiveKit agent
+  15-frontend.yaml              #   Frontend + Route (TLS edge)
+  16-model-manager.yaml         #   Model manager + ServiceAccount + RBAC
+  20-buildconfig-frontend.yaml  #   (Optional) BuildConfig from git
+model-manager/
+  model-manager.py              # Kubernetes-native model switching API
 Makefile                        # Test targets
 ```
 
@@ -183,4 +237,4 @@ Makefile                        # Test targets
 
 ## Upstream
 
-Forked from [redhat-et/chained-voice-assistant-with-vllm-omni](https://github.com/redhat-et/chained-voice-assistant-with-vllm-omni).
+Based on [oglok/voice-assistant-with-vllm-omni](https://github.com/oglok/voice-assistant-with-vllm-omni).
