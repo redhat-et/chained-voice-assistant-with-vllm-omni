@@ -10,7 +10,7 @@ import {
 } from "@livekit/components-react";
 import "@livekit/components-styles";
 import { RoomEvent } from "livekit-client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import TimingOverlay, { type TimingData } from "./TimingOverlay";
 import ModelSelector, {
   defaultSelectionFromAvailable,
@@ -81,6 +81,10 @@ export default function VoiceAssistant() {
   const [statusMsg, setStatusMsg] = useState("");
   const [available, setAvailable] = useState<AvailableModels | null>(null);
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{ text: string; audio: string | null } | null>(null);
+  const [uploadError, setUploadError] = useState("");
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     fetch("/api/models")
@@ -194,6 +198,36 @@ export default function VoiceAssistant() {
     }
   }, [modelSelection, handleConnect]);
 
+  const handleFileUpload = useCallback(async (file: File) => {
+    if (!modelSelection) return;
+    setUploadBusy(true);
+    setUploadError("");
+    setUploadResult(null);
+    try {
+      const form = new FormData();
+      form.append("audio", file);
+      form.append("llm_model", modelSelection.llm_model);
+      form.append("tts_model", modelSelection.tts_model);
+      form.append("tts_voice", modelSelection.tts_voice);
+
+      const res = await fetch("/api/audio-query", { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) {
+        setUploadError(data.error || "Request failed");
+        return;
+      }
+      setUploadResult({ text: data.text, audio: data.audio });
+      if (data.audio && audioRef.current) {
+        audioRef.current.src = `data:audio/mp3;base64,${data.audio}`;
+        audioRef.current.play().catch(() => {});
+      }
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploadBusy(false);
+    }
+  }, [modelSelection]);
+
   const handleDisconnected = useCallback(() => {
     setConnectionDetails(null);
     setConnecting(false);
@@ -208,6 +242,7 @@ export default function VoiceAssistant() {
   }
 
   if (!connectionDetails) {
+    const is2Stage = modelSelection.pipeline_mode === "2-stage";
     return (
       <div className="flex flex-col items-center gap-6 w-full max-w-2xl">
         <ModelSelector
@@ -216,6 +251,45 @@ export default function VoiceAssistant() {
           disabled={false}
           available={available}
         />
+        {is2Stage && (
+          <div className="flex flex-col gap-4 w-full">
+            <label
+              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-purple-500"); }}
+              onDragLeave={(e) => { e.currentTarget.classList.remove("border-purple-500"); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove("border-purple-500");
+                const file = e.dataTransfer.files[0];
+                if (file) handleFileUpload(file);
+              }}
+              className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-900/60 p-8 cursor-pointer transition-colors hover:border-zinc-500"
+            >
+              <input
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleFileUpload(file);
+                  e.target.value = "";
+                }}
+              />
+              <span className="text-2xl">🎵</span>
+              <span className="text-sm text-zinc-400">
+                {uploadBusy ? "Processing..." : "Drop an audio file here or click to upload"}
+              </span>
+            </label>
+            {uploadError && (
+              <p className="text-sm text-red-400 text-center">{uploadError}</p>
+            )}
+            {uploadResult && (
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
+                <p className="text-sm text-zinc-200">{uploadResult.text}</p>
+                <audio ref={audioRef} controls className="w-full" />
+              </div>
+            )}
+          </div>
+        )}
         <button
           onClick={handleConnect}
           disabled={connecting}
