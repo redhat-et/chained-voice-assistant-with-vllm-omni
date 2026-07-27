@@ -37,3 +37,9 @@ Thumbs.db
 # Spec Kit
 .specify/
 specs/
+
+# Docs (kept local only)
+docs/
+
+# Generated files
+*.pptx

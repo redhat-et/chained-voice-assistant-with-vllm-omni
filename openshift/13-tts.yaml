@@ -21,7 +21,7 @@ spec:
         kubernetes.io/hostname: dell-l40s-1.bmas-001.lab.rdu2.dc.redhat.com
       containers:
         - name: vllm-omni
-          image: vllm/vllm-omni:v0.24.0
+          image: quay.io/vllm/automation-vllm-omni:cuda-28466746130
           command: ["vllm", "serve"]
           args:
             - "$(TTS_ACTIVE_MODEL)"
