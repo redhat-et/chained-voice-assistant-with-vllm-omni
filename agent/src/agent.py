@@ -109,7 +109,10 @@ async def strip_thinking_tags(stream):
 
 
 def build_instructions(llm_model):
-    instructions = "You are a helpful voice assistant. Respond naturally and concisely."
+    instructions = (
+        "You are a helpful voice assistant. Respond naturally and concisely. "
+        "You have access to tools — use them when appropriate without describing them to the user."
+    )
     if "qwen" in llm_model.lower():
         instructions += " /no_think"
     return instructions
@@ -126,47 +129,6 @@ WMO_WEATHER_CODES = {
     95: "thunderstorm", 96: "thunderstorm with slight hail",
     99: "thunderstorm with heavy hail",
 }
-
-
-@function_tool()
-async def get_weather(location: str) -> str:
-    """Get the current weather for a location."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        geo = await client.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": location, "count": 1},
-        )
-        geo_data = geo.json()
-        results = geo_data.get("results")
-        if not results:
-            return f"Sorry, I could not find a location called {location}."
-
-        place = results[0]
-        lat, lon = place["latitude"], place["longitude"]
-        name = place.get("name", location)
-        country = place.get("country", "")
-
-        weather = await client.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude": lat,
-                "longitude": lon,
-                "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
-            },
-        )
-        current = weather.json().get("current", {})
-        temp = current.get("temperature_2m")
-        humidity = current.get("relative_humidity_2m")
-        wind = current.get("wind_speed_10m")
-        code = current.get("weather_code", -1)
-        condition = WMO_WEATHER_CODES.get(code, "unknown conditions")
-
-        return (
-            f"{name}, {country}: {condition}, "
-            f"{temp} degrees Celsius, "
-            f"{humidity} percent humidity, "
-            f"wind {wind} kilometers per hour."
-        )
 
 
 TARGET_RMS = 3000
@@ -207,6 +169,46 @@ def normalize_audio_frame(frame: rtc.AudioFrame, target_rms: float = TARGET_RMS)
 class VoiceAssistant(Agent):
     def __init__(self, instructions: str = "You are a helpful voice assistant. Respond naturally and concisely.") -> None:
         super().__init__(instructions=instructions)
+
+    @function_tool()
+    async def get_weather(self, location: str) -> str:
+        """Get the current weather for a location."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            geo = await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": location, "count": 1},
+            )
+            geo_data = geo.json()
+            results = geo_data.get("results")
+            if not results:
+                return f"Sorry, I could not find a location called {location}."
+
+            place = results[0]
+            lat, lon = place["latitude"], place["longitude"]
+            name = place.get("name", location)
+            country = place.get("country", "")
+
+            weather = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+                },
+            )
+            current = weather.json().get("current", {})
+            temp = current.get("temperature_2m")
+            humidity = current.get("relative_humidity_2m")
+            wind = current.get("wind_speed_10m")
+            code = current.get("weather_code", -1)
+            condition = WMO_WEATHER_CODES.get(code, "unknown conditions")
+
+            return (
+                f"{name}, {country}: {condition}, "
+                f"{temp} degrees Celsius, "
+                f"{humidity} percent humidity, "
+                f"wind {wind} kilometers per hour."
+            )
 
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
