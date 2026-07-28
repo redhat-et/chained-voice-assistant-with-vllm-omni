@@ -391,7 +391,7 @@ export default function VoiceAssistant() {
             disabled={connecting}
             className="rounded-full bg-white px-8 py-4 text-lg font-medium text-black transition-opacity hover:opacity-80 disabled:opacity-50"
           >
-            {connecting ? (statusMsg || "Connecting...") : "Start Conversation"}
+            Start Conversation
           </button>
         )}
       </div>

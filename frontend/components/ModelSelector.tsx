@@ -124,7 +124,9 @@ export default function ModelSelector({
 
   const sttModels = available?.stt.length ? buildModelList(available.stt) : [modelOptionFromId(selection.stt_model)];
   const allLlmModels = available?.llm.length ? buildModelList(available.llm) : [modelOptionFromId(selection.llm_model)];
-  const llmModels = is2Stage ? allLlmModels.filter((m) => audioLlmSet.has(m.id)) : allLlmModels;
+  const llmModels = is2Stage
+    ? allLlmModels.filter((m) => audioLlmSet.has(m.id))
+    : allLlmModels.filter((m) => !audioLlmSet.has(m.id));
   const ttsModels = available?.tts.length ? buildModelList(available.tts) : [modelOptionFromId(selection.tts_model)];
 
   const handlePipelineToggle = () => {
