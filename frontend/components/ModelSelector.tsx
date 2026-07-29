@@ -164,17 +164,30 @@ export default function ModelSelector({
       {hasAudioLlms && (
         <div className="flex items-center gap-3">
           <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Pipeline</label>
-          <button
-            onClick={handlePipelineToggle}
-            disabled={disabled}
-            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-              is2Stage
-                ? "bg-purple-600 text-white"
-                : "bg-zinc-700 text-zinc-300 hover:bg-zinc-600"
-            } disabled:opacity-40 disabled:cursor-not-allowed`}
-          >
-            {is2Stage ? "2-Stage (Audio LLM)" : "3-Stage (STT + LLM)"}
-          </button>
+          <div className="flex rounded-full border border-zinc-700 overflow-hidden">
+            <button
+              onClick={is2Stage ? handlePipelineToggle : undefined}
+              disabled={disabled || !is2Stage}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                !is2Stage
+                  ? "bg-zinc-600 text-white cursor-default"
+                  : "bg-transparent text-zinc-400 hover:bg-zinc-800 cursor-pointer"
+              } disabled:cursor-not-allowed`}
+            >
+              3-Stage (STT + LLM)
+            </button>
+            <button
+              onClick={!is2Stage ? handlePipelineToggle : undefined}
+              disabled={disabled || is2Stage}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                is2Stage
+                  ? "bg-purple-600 text-white cursor-default"
+                  : "bg-transparent text-zinc-400 hover:bg-zinc-800 cursor-pointer"
+              } disabled:cursor-not-allowed`}
+            >
+              2-Stage (Audio LLM)
+            </button>
+          </div>
         </div>
       )}
       <div className={`grid grid-cols-1 gap-4 ${is2Stage ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}>
